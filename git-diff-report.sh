@@ -21,6 +21,10 @@ usage() {
 	echo "      --demo-old      Path to demo old file (default: testfileold, requires --include-demo)"
 	echo "      --demo-new      Path to demo new file (default: testfilenew, requires --include-demo)"
 	echo ""
+	echo "Example:"
+	echo "  $0 -o my-report.pdf main~5 main"
+	echo "  # Writes my-report.pdf with first-parent commit diffs for main~5..main"
+	echo ""
 	echo "Range semantics:"
 	echo "  - A must be an ancestor of B."
 	echo "  - A must be on B's first-parent chain."
@@ -82,8 +86,13 @@ parse_args() {
 			DEMO_NEW_SET=true
 			shift
 			;;
+
+		-h|--help)
+			usage 0
+			;;
 		-*)
-			echo "Unknown option: $1"
+			echo "Unknown option: $1" >&2
+			echo "Try '$0 --help' for usage." >&2
 			usage
 			;;
 		*)
@@ -104,7 +113,7 @@ parse_args() {
 	: "${A_COMMIT:?Missing A}"
 	: "${B_COMMIT:?Missing B}"
 
-	# demo args validation (from the other branch)
+	# demo args validation
 	if [[ "$INCLUDE_DEMO" != true && ("$DEMO_OLD" != "testfileold" || "$DEMO_NEW" != "testfilenew") ]]; then
 		echo "Error: --demo-old/--demo-new require --include-demo." >&2
 		usage
