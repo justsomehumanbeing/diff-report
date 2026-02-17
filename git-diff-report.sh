@@ -9,6 +9,8 @@ set -euo pipefail
 # Dependencies: git, delta, aha, wkhtmltopdf
 #
 # Notes:
+# - Validates that A is an ancestor of B.
+# - Validates that A is on the first-parent path of B.
 # - Uses first-parent history to keep a linear narrative.
 # - For merge commits, diffs against first parent (C^1).
 # - For root commit (no parent), diffs against the empty tree.
@@ -16,6 +18,12 @@ set -euo pipefail
 usage() {
   echo "Usage: $0 [-o output.pdf] <A> <B>"
   echo "  -o, --output   Output PDF file (default: diff-report.pdf)"
+  echo ""
+  echo "Range semantics:"
+  echo "  - A must be an ancestor of B."
+  echo "  - A must be on B's first-parent chain."
+  echo "  - Commits are collected from A..B on first-parent history"
+  echo "    (A excluded, B included, oldest to newest)."
   exit 1
 }
 
@@ -72,6 +80,20 @@ if ! git rev-parse --verify --quiet "$A_COMMIT^{commit}" >/dev/null; then
 fi
 if ! git rev-parse --verify --quiet "$B_COMMIT^{commit}" >/dev/null; then
   echo "Error: '$B_COMMIT' is not a valid commit-ish." >&2
+  exit 2
+fi
+
+# Validate expected commit ordering and first-parent path semantics.
+if ! git merge-base --is-ancestor "$A_COMMIT" "$B_COMMIT"; then
+  echo "Error: expected A to be an ancestor of B, but got A='$A_COMMIT' and B='$B_COMMIT'." >&2
+  echo "Hint: swap commits if they were provided in reverse order: $0 [-o output.pdf] $B_COMMIT $A_COMMIT" >&2
+  exit 2
+fi
+
+A_RESOLVED="$(git rev-parse "$A_COMMIT^{commit}")"
+if ! git rev-list --first-parent "$B_COMMIT" | grep -Fxq "$A_RESOLVED"; then
+  echo "Error: first-parent path of B ('$B_COMMIT') does not include A ('$A_COMMIT')." >&2
+  echo "Hint: choose an A commit from B's first-parent history (or swap commits if reversed)." >&2
   exit 2
 fi
 
