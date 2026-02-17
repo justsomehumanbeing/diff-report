@@ -226,13 +226,15 @@ for C in "${COMMITS[@]}"; do
     PARENT="${EMPTY_TREE}"
   fi
 
-  # Commit header/meta
-  AUTHOR_NAME="$(git log -1 --format=%an "$C")"
-  AUTHOR_EMAIL="$(git log -1 --format=%ae "$C")"
-  AUTHOR_DATE="$(git log -1 --format=%ad --date=iso-strict "$C")"
-
-  # Commit message (subject + body)
-  COMMIT_MSG="$(git log -1 --format=%B "$C")"
+  # Commit header/meta + message in one call.
+  # We parse NUL-delimited fields because commit messages can be multiline,
+  # while Git commit object text cannot contain NUL bytes.
+  {
+    IFS= read -r -d '' AUTHOR_NAME
+    IFS= read -r -d '' AUTHOR_EMAIL
+    IFS= read -r -d '' AUTHOR_DATE
+    IFS= read -r -d '' COMMIT_MSG
+  } < <(git log -1 --date=iso-strict --format='%an%x00%ae%x00%ad%x00%B%x00' "$C")
 
   # Diff with delta (ANSI color), then convert to HTML snippet
   # We set width to something large to avoid wrapped lines from delta itself.
