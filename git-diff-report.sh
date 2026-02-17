@@ -16,27 +16,31 @@ set -euo pipefail
 # - For root commit (no parent), diffs against the empty tree.
 
 usage() {
+  local exit_code="${1:-1}"
   echo "Usage: $0 [-o output.pdf] <A> <B>"
   echo "  -o, --output   Output PDF file (default: diff-report.pdf)"
+  echo "  -h, --help     Show this help and exit"
+  echo ""
+  echo "Example:"
+  echo "  $0 -o my-report.pdf main~5 main"
+  echo "  # Writes my-report.pdf with first-parent commit diffs for main~5..main"
   echo ""
   echo "Range semantics:"
   echo "  - A must be an ancestor of B."
   echo "  - A must be on B's first-parent chain."
   echo "  - Commits are collected from A..B on first-parent history"
   echo "    (A excluded, B included, oldest to newest)."
-  exit 1
+  exit "$exit_code"
 }
 
 # Defaults
 OUTPUT="diff-report.pdf"
 
-# Parse args
-if [[ $# -lt 2 ]]; then
-  usage
-fi
-
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    -h|--help)
+      usage 0
+      ;;
     -o|--output)
       shift
       [[ $# -gt 0 ]] || usage
@@ -44,7 +48,8 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     -*)
-      echo "Unknown option: $1"
+      echo "Unknown option: $1" >&2
+      echo "Try '$0 --help' for usage." >&2
       usage
       ;;
     *)
@@ -62,13 +67,17 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [[ -z "${A_COMMIT:-}" || -z "${B_COMMIT:-}" ]]; then
+  usage
+fi
+
 : "${A_COMMIT:?Missing A}"
 : "${B_COMMIT:?Missing B}"
 
 # Check deps
 for cmd in git delta aha wkhtmltopdf; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
-    echo "Error: '$cmd' not found in PATH." >&2
+    echo "Error: '$cmd' not found in PATH. Quick remediation: install: git delta aha wkhtmltopdf" >&2
     exit 2
   fi
 done
