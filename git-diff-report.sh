@@ -16,8 +16,9 @@ set -euo pipefail
 # - For root commit (no parent), diffs against the empty tree.
 
 usage() {
-  echo "Usage: $0 [-o output.pdf] <A> <B>"
+  echo "Usage: $0 [-o output.pdf] [--force] <A> <B>"
   echo "  -o, --output   Output PDF file (default: diff-report.pdf)"
+  echo "  -f, --force    Overwrite output file if it already exists"
   echo ""
   echo "Range semantics:"
   echo "  - A must be an ancestor of B."
@@ -29,6 +30,7 @@ usage() {
 
 # Defaults
 OUTPUT="diff-report.pdf"
+FORCE_OVERWRITE=0
 
 # Parse args
 if [[ $# -lt 2 ]]; then
@@ -41,6 +43,10 @@ while [[ $# -gt 0 ]]; do
       shift
       [[ $# -gt 0 ]] || usage
       OUTPUT="$1"
+      shift
+      ;;
+    -f|--force)
+      FORCE_OVERWRITE=1
       shift
       ;;
     -*)
@@ -64,6 +70,18 @@ done
 
 : "${A_COMMIT:?Missing A}"
 : "${B_COMMIT:?Missing B}"
+
+# Normalize output path once so all write-sites use the same target.
+if command -v realpath >/dev/null 2>&1; then
+  OUTPUT_ABS="$(realpath -m "$OUTPUT")"
+else
+  OUTPUT_ABS="$(python3 -c 'import os,sys; print(os.path.abspath(sys.argv[1]))' "$OUTPUT")"
+fi
+
+if [[ -d "$OUTPUT_ABS" ]]; then
+  echo "Error: output target is a directory: $OUTPUT_ABS" >&2
+  exit 2
+fi
 
 # Check deps
 for cmd in git delta aha wkhtmltopdf; do
@@ -96,6 +114,25 @@ if ! git rev-list --first-parent "$B_COMMIT" | grep -Fxq "$A_RESOLVED"; then
   echo "Hint: choose an A commit from B's first-parent history (or swap commits if reversed)." >&2
   exit 2
 fi
+
+# Guardrails for accidental destructive writes.
+REPO_TOPLEVEL="$(git rev-parse --show-toplevel)"
+if [[ "$OUTPUT_ABS" == "$REPO_TOPLEVEL"/* ]]; then
+  OUTPUT_REL_TO_REPO="${OUTPUT_ABS#"$REPO_TOPLEVEL"/}"
+  if git ls-files --error-unmatch -- "$OUTPUT_REL_TO_REPO" >/dev/null 2>&1; then
+    echo "Warning: output target is a tracked file in this repository: $OUTPUT_ABS" >&2
+    echo "Refusing to overwrite tracked files. Choose a different output path." >&2
+    exit 2
+  fi
+fi
+
+if [[ -e "$OUTPUT_ABS" && "$FORCE_OVERWRITE" -ne 1 ]]; then
+  echo "Warning: output file already exists: $OUTPUT_ABS" >&2
+  echo "Refusing to overwrite without --force." >&2
+  exit 2
+fi
+
+echo "Output target (absolute): $OUTPUT_ABS"
 
 # Temp files
 WORKDIR="$(mktemp -d)"
@@ -211,8 +248,8 @@ if [[ ${#COMMITS[@]} -eq 0 ]]; then
 <p>No commits found in the specified range.</p>
 </body></html>
 HTML
-  wkhtmltopdf "$HTML" "$OUTPUT"
-  echo "Wrote empty report to ${OUTPUT}"
+  wkhtmltopdf "$HTML" "$OUTPUT_ABS"
+  echo "Wrote empty report to ${OUTPUT_ABS}"
   exit 0
 fi
 
@@ -282,6 +319,6 @@ cat >> "$HTML" <<'HTML'
 HTML
 
 # Produce PDF
-wkhtmltopdf "$HTML" "$OUTPUT"
+wkhtmltopdf "$HTML" "$OUTPUT_ABS"
 
-echo "✅ Wrote report to: ${OUTPUT}"
+echo "✅ Wrote report to: ${OUTPUT_ABS}"
