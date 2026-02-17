@@ -263,7 +263,7 @@ render_demo_section() {
         | delta "${DELTA_DEMO_OPTIONS[@]}" --syntax-theme="$DELTA_THEME" \
         | aha --line-fix || true
     else
-      git diff --no-index --no-ext-diff "$DEMO_OLD" "$DEMO_NEW" \
+      git diff --no-color --no-index --no-ext-diff "$DEMO_OLD" "$DEMO_NEW" \
         | html_escape_stream \
         | awk 'BEGIN{print "<pre class=\"diff\"><code>"} {print} END{print "</code></pre>"}' || true
     fi
