@@ -234,7 +234,10 @@ for C in "${COMMITS[@]}"; do
   {
     echo "<div class=\"commit-block\">"
 	echo "  <h2>Commit with Commit-Hash: ${C_ABBR}</h2>"
-    echo "  <p class=\"meta\"><strong>Author:</strong> ${AUTHOR_NAME} &lt;${AUTHOR_EMAIL}&gt;<br>"
+    # All git-derived text fields must be HTML-escaped before rendering.
+    esc_author_name="$(printf '%s' "$AUTHOR_NAME" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g')"
+    esc_author_email="$(printf '%s' "$AUTHOR_EMAIL" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g')"
+    echo "  <p class=\"meta\"><strong>Author:</strong> ${esc_author_name} &lt;${esc_author_email}&gt;<br>"
     echo "  <strong>Date:</strong> ${AUTHOR_DATE}</p>"
     echo "  <h3>Commit-Message</h3>"
     # Escape commit message for HTML
