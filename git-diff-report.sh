@@ -235,7 +235,7 @@ if [[ -f testfileold && -f testfilenew ]]; then
         | delta --paging=never --wrap-max-lines=0 --true-color=always --syntax-theme="gruvbox-light" \
         | aha --line-fix || true
     else
-      git diff --no-index --no-ext-diff testfileold testfilenew \
+      git diff --no-color --no-index --no-ext-diff testfileold testfilenew \
         | html_escape \
         | awk 'BEGIN{print "<pre class=\"diff\"><code>"} {print} END{print "</code></pre>"}' || true
     fi
@@ -302,12 +302,12 @@ for C in "${COMMITS[@]}"; do
 			--syntax-theme="gruvbox-light" \
         | aha --line-fix > "$DIFF_HTML_SNIPPET"; then
       echo "Warning: diff for ${C_ABBR} failed; including plain text." >&2
-      git diff --no-ext-diff "${PARENT}" "${C}" \
+      git diff --no-color --no-ext-diff "${PARENT}" "${C}" \
         | html_escape \
         | awk 'BEGIN{print "<pre class=\"diff\"><code>"} {print} END{print "</code></pre>"}' > "$DIFF_HTML_SNIPPET"
     fi
   else
-    git diff --no-ext-diff "${PARENT}" "${C}" \
+    git diff --no-color --no-ext-diff "${PARENT}" "${C}" \
       | html_escape \
       | awk 'BEGIN{print "<pre class=\"diff\"><code>"} {print} END{print "</code></pre>"}' > "$DIFF_HTML_SNIPPET"
   fi
