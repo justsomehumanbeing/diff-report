@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-set -euo pipefail
 
 # git-diff-report.sh
 # Build a pretty PDF report of per-commit diffs along first-parent from A (exclusive) to B (inclusive).
@@ -7,17 +6,16 @@ set -euo pipefail
 #   git-diff-report.sh [-o output.pdf] <A> <B>
 #
 # Dependencies: git, delta, aha, wkhtmltopdf
-#
-# Notes:
-# - Validates that A is an ancestor of B.
-# - Validates that A is on the first-parent path of B.
-# - Uses first-parent history to keep a linear narrative.
-# - For merge commits, diffs against first parent (C^1).
-# - For root commit (no parent), diffs against the empty tree.
+
+readonly DEFAULT_OUTPUT_FILENAME="diff-report.pdf"
+readonly EMPTY_TREE_HASH="4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+readonly DELTA_THEME="gruvbox-light"
+readonly DELTA_DEMO_OPTIONS=(--paging=never --wrap-max-lines=0 --true-color=always)
+readonly DELTA_COMMIT_OPTIONS=(--paging=never --wrap-max-lines=0 --width=200 --true-color=always)
 
 usage() {
   echo "Usage: $0 [-o output.pdf] <A> <B>"
-  echo "  -o, --output   Output PDF file (default: diff-report.pdf)"
+  echo "  -o, --output   Output PDF file (default: ${DEFAULT_OUTPUT_FILENAME})"
   echo ""
   echo "Range semantics:"
   echo "  - A must be an ancestor of B."
@@ -27,83 +25,99 @@ usage() {
   exit 1
 }
 
-# Defaults
-OUTPUT="diff-report.pdf"
+# html_escape <text>
+# Input: raw text as $1. Output: escaped HTML text on stdout.
+html_escape() {
+  printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
+}
 
-# Parse args
-if [[ $# -lt 2 ]]; then
-  usage
-fi
+# parse_args "$@"
+# Input: CLI args. Output: sets A_COMMIT, B_COMMIT, OUTPUT globals.
+parse_args() {
+  OUTPUT="$DEFAULT_OUTPUT_FILENAME"
+  A_COMMIT=""
+  B_COMMIT=""
 
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    -o|--output)
-      shift
-      [[ $# -gt 0 ]] || usage
-      OUTPUT="$1"
-      shift
-      ;;
-    -*)
-      echo "Unknown option: $1"
-      usage
-      ;;
-    *)
-      # positional
-      if [[ -z "${A_COMMIT:-}" ]]; then
-        A_COMMIT="$1"
-      elif [[ -z "${B_COMMIT:-}" ]]; then
-        B_COMMIT="$1"
-      else
-        echo "Too many positional arguments."
+  if [[ $# -lt 2 ]]; then
+    usage
+  fi
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -o|--output)
+        shift
+        [[ $# -gt 0 ]] || usage
+        OUTPUT="$1"
+        shift
+        ;;
+      -*)
+        echo "Unknown option: $1"
         usage
-      fi
-      shift
-      ;;
-  esac
-done
+        ;;
+      *)
+        if [[ -z "${A_COMMIT:-}" ]]; then
+          A_COMMIT="$1"
+        elif [[ -z "${B_COMMIT:-}" ]]; then
+          B_COMMIT="$1"
+        else
+          echo "Too many positional arguments."
+          usage
+        fi
+        shift
+        ;;
+    esac
+  done
 
-: "${A_COMMIT:?Missing A}"
-: "${B_COMMIT:?Missing B}"
+  : "${A_COMMIT:?Missing A}"
+  : "${B_COMMIT:?Missing B}"
+}
 
-# Check deps
-for cmd in git delta aha wkhtmltopdf; do
-  if ! command -v "$cmd" >/dev/null 2>&1; then
-    echo "Error: '$cmd' not found in PATH." >&2
+# check_dependencies
+# Input: none. Output: exits non-zero if required tools are unavailable.
+check_dependencies() {
+  for cmd in git delta aha wkhtmltopdf; do
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+      echo "Error: '$cmd' not found in PATH." >&2
+      exit 2
+    fi
+  done
+}
+
+# validate_commits
+# Input: A_COMMIT/B_COMMIT globals. Output: exits non-zero on invalid/unsupported range.
+validate_commits() {
+  if ! git rev-parse --verify --quiet "$A_COMMIT^{commit}" >/dev/null; then
+    echo "Error: '$A_COMMIT' is not a valid commit-ish." >&2
     exit 2
   fi
-done
+  if ! git rev-parse --verify --quiet "$B_COMMIT^{commit}" >/dev/null; then
+    echo "Error: '$B_COMMIT' is not a valid commit-ish." >&2
+    exit 2
+  fi
 
-# Verify commits
-if ! git rev-parse --verify --quiet "$A_COMMIT^{commit}" >/dev/null; then
-  echo "Error: '$A_COMMIT' is not a valid commit-ish." >&2
-  exit 2
-fi
-if ! git rev-parse --verify --quiet "$B_COMMIT^{commit}" >/dev/null; then
-  echo "Error: '$B_COMMIT' is not a valid commit-ish." >&2
-  exit 2
-fi
+  if ! git merge-base --is-ancestor "$A_COMMIT" "$B_COMMIT"; then
+    echo "Error: expected A to be an ancestor of B, but got A='$A_COMMIT' and B='$B_COMMIT'." >&2
+    echo "Hint: swap commits if they were provided in reverse order: $0 [-o output.pdf] $B_COMMIT $A_COMMIT" >&2
+    exit 2
+  fi
 
-# Validate expected commit ordering and first-parent path semantics.
-if ! git merge-base --is-ancestor "$A_COMMIT" "$B_COMMIT"; then
-  echo "Error: expected A to be an ancestor of B, but got A='$A_COMMIT' and B='$B_COMMIT'." >&2
-  echo "Hint: swap commits if they were provided in reverse order: $0 [-o output.pdf] $B_COMMIT $A_COMMIT" >&2
-  exit 2
-fi
+  local a_resolved
+  a_resolved="$(git rev-parse "$A_COMMIT^{commit}")"
+  if ! git rev-list --first-parent "$B_COMMIT" | grep -Fxq "$a_resolved"; then
+    echo "Error: first-parent path of B ('$B_COMMIT') does not include A ('$A_COMMIT')." >&2
+    echo "Hint: choose an A commit from B's first-parent history (or swap commits if reversed)." >&2
+    exit 2
+  fi
+}
 
-A_RESOLVED="$(git rev-parse "$A_COMMIT^{commit}")"
-if ! git rev-list --first-parent "$B_COMMIT" | grep -Fxq "$A_RESOLVED"; then
-  echo "Error: first-parent path of B ('$B_COMMIT') does not include A ('$A_COMMIT')." >&2
-  echo "Hint: choose an A commit from B's first-parent history (or swap commits if reversed)." >&2
-  exit 2
-fi
+# render_html_header <html_path>
+# Input: output HTML path. Output: writes document header and range metadata.
+render_html_header() {
+  local html_path="$1"
+  local repo_name
+  repo_name="$(basename "$(git rev-parse --show-toplevel)")"
 
-# Temp files
-WORKDIR="$(mktemp -d)"
-HTML="${WORKDIR}/report.html"
-trap 'rm -rf "$WORKDIR"' EXIT
-
-# HTML head
-cat > "$HTML" <<'HTML'
+  cat > "$html_path" <<'HTML'
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -122,28 +136,28 @@ cat > "$HTML" <<'HTML'
   /* Make aha output blend in */
   pre { margin: 0; padding: 1rem; }
 
-	.table2 {
-	  width: 100%;
-	  table-layout: fixed;     /* zwei feste Spalten */
-	  border-collapse: separate;
-	  border-spacing: 16px 0;  /* Abstand zwischen Spalten */
-	}
-	.table2 td {
-	  width: 50%;
-	  vertical-align: top;
-	}
+  .table2 {
+    width: 100%;
+    table-layout: fixed;
+    border-collapse: separate;
+    border-spacing: 16px 0;
+  }
+  .table2 td {
+    width: 50%;
+    vertical-align: top;
+  }
   pre.code {
-	  white-space: pre;          /* KEIN Umbruch, Whitespace bleibt 1:1 erhalten */
-	  word-break: normal;        /* nicht mitten im Wort umbrechen */
-	  overflow-wrap: normal;     /* keine Not-Umbrüche */
-	  overflow-x: auto;          /* horizontales Scrollen erlauben */
-	  overflow-y: hidden;
-	  background: #f6f8fa;
-	  border: 1px solid #eaecef;
-	  border-radius: 8px;
-	  padding: 1rem;
-	  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
-	}
+    white-space: pre;
+    word-break: normal;
+    overflow-wrap: normal;
+    overflow-x: auto;
+    overflow-y: hidden;
+    background: #f6f8fa;
+    border: 1px solid #eaecef;
+    border-radius: 8px;
+    padding: 1rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  }
   code { white-space: pre-wrap; }
 </style>
 </head>
@@ -151,137 +165,142 @@ cat > "$HTML" <<'HTML'
 <h1>Git Diff Report</h1>
 HTML
 
-# Resolve nice labels
-REPO_NAME="$(basename "$(git rev-parse --show-toplevel)")"
-A_ABBR="$(git rev-parse --short "$A_COMMIT")"
-B_ABBR="$(git rev-parse --short "$B_COMMIT")"
-
-cat >> "$HTML" <<HTML
-<p class="meta"><strong>Repository:</strong> ${REPO_NAME}<br>
+  cat >> "$html_path" <<HTML
+<p class="meta"><strong>Repository:</strong> ${repo_name}<br>
 <strong>Range:</strong> ${A_COMMIT}..${B_COMMIT} (first-parent, oldest → newest)</p>
 <hr class="sep">
 HTML
+}
 
-##############################################
-# INSERT: How to read diffs? (before commits)
-##############################################
-if [[ -f testfileold && -f testfilenew ]]; then
+# render_demo_section <html_path>
+# Input: output HTML path. Output: appends toy diff section if testfileold/testfilenew exist.
+render_demo_section() {
+  local html_path="$1"
+
+  if [[ -f testfileold && -f testfilenew ]]; then
+    {
+      echo '<h2>How to read diffs?</h2>'
+      echo '<p>In the toy example below, we compare <code>testfileold</code> → <code>testfilenew</code>.'
+      echo 'Green lines are additions, red lines are deletions. Inline highlights mark changed words or whitespace.</p>'
+
+      echo '<h3>The compared files</h3>'
+      echo '<table class="table2"><tr>'
+
+      echo '<td><h4>testfileold</h4>'
+      printf '<pre class="code">%s</pre>\n' "$(html_escape "$(cat testfileold)")"
+      echo '</td>'
+
+      echo '<td><h4>testfilenew</h4>'
+      printf '<pre class="code">%s</pre>\n' "$(html_escape "$(cat testfilenew)")"
+      echo '</td>'
+
+      echo '</tr></table>'
+
+      echo '<h3>Example diff</h3>'
+      echo '<div class="diff">'
+      git diff --no-index --no-ext-diff testfileold testfilenew \
+        | delta "${DELTA_DEMO_OPTIONS[@]}" --syntax-theme="$DELTA_THEME" \
+        | aha --line-fix || true
+      echo '</div>'
+      echo '<hr class="sep">'
+      echo '<div class="pagebreak"></div>'
+    } >> "$html_path"
+  fi
+}
+
+# render_commit_block <html_path> <commit_sha> <workdir>
+# Input: target HTML path + commit ID + temporary directory. Output: appends one commit block.
+render_commit_block() {
+  local html_path="$1"
+  local commit_sha="$2"
+  local workdir="$3"
+
+  local commit_abbr parent diff_html_snippet
+  commit_abbr="$(git rev-parse --short "$commit_sha")"
+
+  if git rev-parse --verify --quiet "${commit_sha}^1" >/dev/null; then
+    parent="${commit_sha}^1"
+  else
+    parent="$EMPTY_TREE_HASH"
+  fi
+
+  local author_name author_email author_date commit_msg
   {
-    echo '<h2>How to read diffs?</h2>'
-    echo '<p>In the toy example below, we compare <code>testfileold</code> → <code>testfilenew</code>.'
-    echo 'Green lines are additions, red lines are deletions. Inline highlights mark changed words or whitespace.</p>'
+    IFS= read -r -d '' author_name
+    IFS= read -r -d '' author_email
+    IFS= read -r -d '' author_date
+    IFS= read -r -d '' commit_msg
+  } < <(git log -1 --date=iso-strict --format='%an%x00%ae%x00%ad%x00%B%x00' "$commit_sha")
 
+  diff_html_snippet="$workdir/diff-${commit_abbr}.html"
+  if ! git diff --no-ext-diff "${parent}" "${commit_sha}" \
+      | delta "${DELTA_COMMIT_OPTIONS[@]}" --syntax-theme="$DELTA_THEME" \
+      | aha --line-fix > "$diff_html_snippet"; then
+    echo "Warning: diff for ${commit_abbr} failed; including plain text." >&2
+    git diff --no-ext-diff "${parent}" "${commit_sha}" \
+      | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' \
+      | awk 'BEGIN{print "<pre class=\"diff\"><code>"} {print} END{print "</code></pre>"}' > "$diff_html_snippet"
+  fi
 
-	echo '<h3>The compared files</h3>'
-	echo '<table class="table2"><tr>'
-
-	echo '<td><h4>testfileold</h4>'
-	printf '<pre class="code">%s</pre>\n' \
-	  "$(sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' testfileold)"
-	echo '</td>'
-
-	echo '<td><h4>testfilenew</h4>'
-	printf '<pre class="code">%s</pre>\n' \
-	  "$(sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' testfilenew)"
-	echo '</td>'
-
-	echo '</tr></table>'
-
-    echo '<h3>Example diff</h3>'
-    echo '<div class="diff">'
-    # --no-index lets us diff two paths outside git; add `|| true` so a nonzero diff exit won’t kill the script.
-    git diff --no-index --no-ext-diff testfileold testfilenew \
-      | delta --paging=never --wrap-max-lines=0 --true-color=always --syntax-theme="gruvbox-light" \
-      | aha --line-fix || true
+  {
+    echo '<div class="commit-block">'
+    echo "  <h2>Commit with Commit-Hash: ${commit_abbr}</h2>"
+    echo "  <p class=\"meta\"><strong>Author:</strong> $(html_escape "$author_name") &lt;$(html_escape "$author_email")&gt;<br>"
+    echo "  <strong>Date:</strong> ${author_date}</p>"
+    echo '  <h3>Commit-Message</h3>'
+    printf '  <div class="commit-msg">%s</div>\n' "$(html_escape "$commit_msg")"
+    echo '  <h3>Changes made in this commit (diff against parent):</h3>'
+    echo '  <div class="diff">'
+    cat "$diff_html_snippet"
+    echo '  </div>'
     echo '</div>'
-    echo '<hr class="sep">'
-	echo '<div class="pagebreak"></div>'
-  } >> "$HTML"
-fi
+  } >> "$html_path"
+}
 
-# Empty tree for root diffs
-EMPTY_TREE="4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+# generate_diff_html <html_path> <workdir>
+# Input: target HTML path + temporary directory. Output: appends commit sections and closes document.
+generate_diff_html() {
+  local html_path="$1"
+  local workdir="$2"
 
-# Collect commits along first-parent path (A excluded, B included), oldest -> newest
-mapfile -t COMMITS < <(git rev-list --first-parent --reverse "${A_COMMIT}..${B_COMMIT}")
-
-if [[ ${#COMMITS[@]} -eq 0 ]]; then
-  echo "No commits found in ${A_COMMIT}..${B_COMMIT} (first-parent)." >&2
-  cat >> "$HTML" <<HTML
+  mapfile -t commits < <(git rev-list --first-parent --reverse "${A_COMMIT}..${B_COMMIT}")
+  if [[ ${#commits[@]} -eq 0 ]]; then
+    echo "No commits found in ${A_COMMIT}..${B_COMMIT} (first-parent)." >&2
+    cat >> "$html_path" <<'HTML'
 <p>No commits found in the specified range.</p>
 </body></html>
 HTML
-  wkhtmltopdf "$HTML" "$OUTPUT"
-  echo "Wrote empty report to ${OUTPUT}"
-  exit 0
-fi
-
-for C in "${COMMITS[@]}"; do
-  C_ABBR="$(git rev-parse --short "$C")"
-
-  # Find parent: first parent if exists, else empty tree
-  if git rev-parse --verify --quiet "${C}^1" >/dev/null; then
-    PARENT="${C}^1"
-  else
-    PARENT="${EMPTY_TREE}"
+    return 0
   fi
 
-  # Commit header/meta + message in one call.
-  # We parse NUL-delimited fields because commit messages can be multiline,
-  # while Git commit object text cannot contain NUL bytes.
-  {
-    IFS= read -r -d '' AUTHOR_NAME
-    IFS= read -r -d '' AUTHOR_EMAIL
-    IFS= read -r -d '' AUTHOR_DATE
-    IFS= read -r -d '' COMMIT_MSG
-  } < <(git log -1 --date=iso-strict --format='%an%x00%ae%x00%ad%x00%B%x00' "$C")
+  local c
+  for c in "${commits[@]}"; do
+    render_commit_block "$html_path" "$c" "$workdir"
+  done
 
-  # Diff with delta (ANSI color), then convert to HTML snippet
-  # We set width to something large to avoid wrapped lines from delta itself.
-  DIFF_HTML_SNIPPET="$WORKDIR/diff-${C_ABBR}.html"
-  if ! git diff --no-ext-diff "${PARENT}" "${C}" \
-      | delta \
-	  		--paging=never \
-			--wrap-max-lines=0 \
-			--width=200 \
-			--true-color=always \
-			--syntax-theme="gruvbox-light" \
-      | aha --line-fix > "$DIFF_HTML_SNIPPET"; then
-    echo "Warning: diff for ${C_ABBR} failed; including plain text." >&2
-    # Fallback: plain text without colors
-    git diff --no-ext-diff "${PARENT}" "${C}" \
-      | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' \
-      | awk 'BEGIN{print "<pre class=\"diff\"><code>"} {print} END{print "</code></pre>"}' > "$DIFF_HTML_SNIPPET"
-  fi
-
-  # Write one commit block
-  {
-    echo "<div class=\"commit-block\">"
-	echo "  <h2>Commit with Commit-Hash: ${C_ABBR}</h2>"
-    # All git-derived text fields must be HTML-escaped before rendering.
-    esc_author_name="$(printf '%s' "$AUTHOR_NAME" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g')"
-    esc_author_email="$(printf '%s' "$AUTHOR_EMAIL" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g')"
-    echo "  <p class=\"meta\"><strong>Author:</strong> ${esc_author_name} &lt;${esc_author_email}&gt;<br>"
-    echo "  <strong>Date:</strong> ${AUTHOR_DATE}</p>"
-    echo "  <h3>Commit-Message</h3>"
-    # Escape commit message for HTML
-    esc_msg="$(printf '%s' "$COMMIT_MSG" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g')"
-    printf '  <div class="commit-msg">%s</div>\n' "$esc_msg"
-	echo "  <h3>Changes made in this commit (diff against parent):</h3>"
-    echo "  <div class=\"diff\">"
-    cat "$DIFF_HTML_SNIPPET"
-    echo "  </div>"
-    echo "</div>"
-  } >> "$HTML"
-done
-
-# Close HTML
-cat >> "$HTML" <<'HTML'
+  cat >> "$html_path" <<'HTML'
 </body>
 </html>
 HTML
+}
 
-# Produce PDF
-wkhtmltopdf "$HTML" "$OUTPUT"
+main() {
+  set -euo pipefail
 
-echo "✅ Wrote report to: ${OUTPUT}"
+  parse_args "$@"
+  check_dependencies
+  validate_commits
+
+  WORKDIR="$(mktemp -d)"
+  HTML="${WORKDIR}/report.html"
+  trap 'rm -rf "$WORKDIR"' EXIT
+
+  render_html_header "$HTML"
+  render_demo_section "$HTML"
+  generate_diff_html "$HTML" "$WORKDIR"
+
+  wkhtmltopdf "$HTML" "$OUTPUT"
+  echo "✅ Wrote report to: ${OUTPUT}"
+}
+
+main "$@"
