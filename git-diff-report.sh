@@ -3,8 +3,9 @@ set -euo pipefail
 
 # git-diff-report.sh
 # Build a pretty PDF report of per-commit diffs along first-parent from A (exclusive) to B (inclusive).
+# Optional: include a demo "how to read diffs" section comparing two standalone files.
 # Usage:
-#   git-diff-report.sh [-o output.pdf] <A> <B>
+#   git-diff-report.sh [-o output.pdf] [--include-demo [--demo-old path --demo-new path]] <A> <B>
 #
 # Dependencies: git, delta, aha, wkhtmltopdf
 #
@@ -16,19 +17,28 @@ set -euo pipefail
 # - For root commit (no parent), diffs against the empty tree.
 
 usage() {
-  echo "Usage: $0 [-o output.pdf] <A> <B>"
+  echo "Usage: $0 [-o output.pdf] [--include-demo [--demo-old path --demo-new path]] <A> <B>"
   echo "  -o, --output   Output PDF file (default: diff-report.pdf)"
+  echo "      --include-demo  Include an optional demo section that explains diff colors"
+  echo "      --demo-old      Path to demo old file (default: testfileold, requires --include-demo)"
+  echo "      --demo-new      Path to demo new file (default: testfilenew, requires --include-demo)"
   echo ""
   echo "Range semantics:"
   echo "  - A must be an ancestor of B."
   echo "  - A must be on B's first-parent chain."
   echo "  - Commits are collected from A..B on first-parent history"
   echo "    (A excluded, B included, oldest to newest)."
+  echo ""
+  echo "By default, output only reflects git commit history in the selected range."
+  echo "The demo section is opt-in and is not derived from commit history."
   exit 1
 }
 
 # Defaults
 OUTPUT="diff-report.pdf"
+INCLUDE_DEMO=false
+DEMO_OLD="testfileold"
+DEMO_NEW="testfilenew"
 
 # Parse args
 if [[ $# -lt 2 ]]; then
@@ -41,6 +51,22 @@ while [[ $# -gt 0 ]]; do
       shift
       [[ $# -gt 0 ]] || usage
       OUTPUT="$1"
+      shift
+      ;;
+    --include-demo)
+      INCLUDE_DEMO=true
+      shift
+      ;;
+    --demo-old)
+      shift
+      [[ $# -gt 0 ]] || usage
+      DEMO_OLD="$1"
+      shift
+      ;;
+    --demo-new)
+      shift
+      [[ $# -gt 0 ]] || usage
+      DEMO_NEW="$1"
       shift
       ;;
     -*)
@@ -64,6 +90,22 @@ done
 
 : "${A_COMMIT:?Missing A}"
 : "${B_COMMIT:?Missing B}"
+
+if [[ "$INCLUDE_DEMO" != true && ( "$DEMO_OLD" != "testfileold" || "$DEMO_NEW" != "testfilenew" ) ]]; then
+  echo "Error: --demo-old/--demo-new require --include-demo." >&2
+  usage
+fi
+
+if [[ "$INCLUDE_DEMO" == true ]]; then
+  if [[ ! -f "$DEMO_OLD" ]]; then
+    echo "Error: demo old file not found: $DEMO_OLD" >&2
+    exit 2
+  fi
+  if [[ ! -f "$DEMO_NEW" ]]; then
+    echo "Error: demo new file not found: $DEMO_NEW" >&2
+    exit 2
+  fi
+fi
 
 # Check deps
 for cmd in git delta aha wkhtmltopdf; do
@@ -165,24 +207,26 @@ HTML
 ##############################################
 # INSERT: How to read diffs? (before commits)
 ##############################################
-if [[ -f testfileold && -f testfilenew ]]; then
+if [[ "$INCLUDE_DEMO" == true ]]; then
   {
     echo '<h2>How to read diffs?</h2>'
-    echo '<p>In the toy example below, we compare <code>testfileold</code> → <code>testfilenew</code>.'
+    esc_demo_old="$(printf '%s' "$DEMO_OLD" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g')"
+    esc_demo_new="$(printf '%s' "$DEMO_NEW" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g')"
+    echo "<p>In the toy example below, we compare <code>${esc_demo_old}</code> → <code>${esc_demo_new}</code>."
     echo 'Green lines are additions, red lines are deletions. Inline highlights mark changed words or whitespace.</p>'
 
 
 	echo '<h3>The compared files</h3>'
 	echo '<table class="table2"><tr>'
 
-	echo '<td><h4>testfileold</h4>'
+	echo "<td><h4>${esc_demo_old}</h4>"
 	printf '<pre class="code">%s</pre>\n' \
-	  "$(sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' testfileold)"
+	  "$(sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' "$DEMO_OLD")"
 	echo '</td>'
 
-	echo '<td><h4>testfilenew</h4>'
+	echo "<td><h4>${esc_demo_new}</h4>"
 	printf '<pre class="code">%s</pre>\n' \
-	  "$(sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' testfilenew)"
+	  "$(sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' "$DEMO_NEW")"
 	echo '</td>'
 
 	echo '</tr></table>'
@@ -190,7 +234,7 @@ if [[ -f testfileold && -f testfilenew ]]; then
     echo '<h3>Example diff</h3>'
     echo '<div class="diff">'
     # --no-index lets us diff two paths outside git; add `|| true` so a nonzero diff exit won’t kill the script.
-    git diff --no-index --no-ext-diff testfileold testfilenew \
+    git diff --no-index --no-ext-diff "$DEMO_OLD" "$DEMO_NEW" \
       | delta --paging=never --wrap-max-lines=0 --true-color=always --syntax-theme="gruvbox-light" \
       | aha --line-fix || true
     echo '</div>'
