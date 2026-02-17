@@ -2,8 +2,9 @@
 
 # git-diff-report.sh
 # Build a pretty PDF report of per-commit diffs along first-parent from A (exclusive) to B (inclusive).
+# Optional: include a demo "how to read diffs" section comparing two standalone files.
 # Usage:
-#   git-diff-report.sh [-o output.pdf] <A> <B>
+#   git-diff-report.sh [-o output.pdf] [--include-demo [--demo-old path --demo-new path]] <A> <B>
 #
 # Dependencies: git, delta, aha, wkhtmltopdf
 
@@ -14,14 +15,20 @@ readonly DELTA_DEMO_OPTIONS=(--paging=never --wrap-max-lines=0 --true-color=alwa
 readonly DELTA_COMMIT_OPTIONS=(--paging=never --wrap-max-lines=0 --width=200 --true-color=always)
 
 usage() {
-  echo "Usage: $0 [-o output.pdf] <A> <B>"
-  echo "  -o, --output   Output PDF file (default: ${DEFAULT_OUTPUT_FILENAME})"
+  echo "Usage: $0 [-o output.pdf] [--include-demo [--demo-old path --demo-new path]] <A> <B>"
+  echo "  -o, --output        Output PDF file (default: diff-report.pdf)"
+  echo "      --include-demo  Include an optional demo section that explains diff colors"
+  echo "      --demo-old      Path to demo old file (default: testfileold, requires --include-demo)"
+  echo "      --demo-new      Path to demo new file (default: testfilenew, requires --include-demo)"
   echo ""
   echo "Range semantics:"
   echo "  - A must be an ancestor of B."
   echo "  - A must be on B's first-parent chain."
   echo "  - Commits are collected from A..B on first-parent history"
   echo "    (A excluded, B included, oldest to newest)."
+  echo ""
+  echo "By default, output only reflects git commit history in the selected range."
+  echo "The demo section is opt-in and is not derived from commit history."
   exit 1
 }
 
@@ -31,16 +38,23 @@ html_escape() {
   printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
 }
 
+# Defaults
+OUTPUT="$DEFAULT_OUTPUT_FILENAME"
+INCLUDE_DEMO=false
+DEMO_OLD="testfileold"
+DEMO_NEW="testfilenew"
+A_COMMIT=""
+B_COMMIT=""
+
 # parse_args "$@"
-# Input: CLI args. Output: sets A_COMMIT, B_COMMIT, OUTPUT globals.
+# Input: CLI args. Output: sets A_COMMIT, B_COMMIT, OUTPUT, INCLUDE_DEMO, DEMO_OLD, DEMO_NEW globals.
 parse_args() {
   OUTPUT="$DEFAULT_OUTPUT_FILENAME"
   A_COMMIT=""
   B_COMMIT=""
-
-  if [[ $# -lt 2 ]]; then
-    usage
-  fi
+  INCLUDE_DEMO=false
+  DEMO_OLD="testfileold"
+  DEMO_NEW="testfilenew"
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -50,17 +64,34 @@ parse_args() {
         OUTPUT="$1"
         shift
         ;;
+      --include-demo)
+        INCLUDE_DEMO=true
+        shift
+        ;;
+      --demo-old)
+        shift
+        [[ $# -gt 0 ]] || usage
+        DEMO_OLD="$1"
+        shift
+        ;;
+      --demo-new)
+        shift
+        [[ $# -gt 0 ]] || usage
+        DEMO_NEW="$1"
+        shift
+        ;;
       -*)
-        echo "Unknown option: $1"
+        echo "Unknown option: $1" >&2
         usage
         ;;
       *)
+        # positional
         if [[ -z "${A_COMMIT:-}" ]]; then
           A_COMMIT="$1"
         elif [[ -z "${B_COMMIT:-}" ]]; then
           B_COMMIT="$1"
         else
-          echo "Too many positional arguments."
+          echo "Too many positional arguments." >&2
           usage
         fi
         shift
@@ -70,6 +101,12 @@ parse_args() {
 
   : "${A_COMMIT:?Missing A}"
   : "${B_COMMIT:?Missing B}"
+
+  # demo args validation (from the other branch)
+  if [[ "$INCLUDE_DEMO" != true && ( "$DEMO_OLD" != "testfileold" || "$DEMO_NEW" != "testfilenew" ) ]]; then
+    echo "Error: --demo-old/--demo-new require --include-demo." >&2
+    usage
+  fi
 }
 
 # check_dependencies
@@ -107,6 +144,21 @@ validate_commits() {
     echo "Error: first-parent path of B ('$B_COMMIT') does not include A ('$A_COMMIT')." >&2
     echo "Hint: choose an A commit from B's first-parent history (or swap commits if reversed)." >&2
     exit 2
+  fi
+}
+
+# validate_demo_files
+# Input: INCLUDE_DEMO, DEMO_OLD, DEMO_NEW globals.
+validate_demo_files() {
+  if [[ "$INCLUDE_DEMO" == true ]]; then
+    if [[ ! -f "$DEMO_OLD" ]]; then
+      echo "Error: demo old file not found: $DEMO_OLD" >&2
+      exit 2
+    fi
+    if [[ ! -f "$DEMO_NEW" ]]; then
+      echo "Error: demo new file not found: $DEMO_NEW" >&2
+      exit 2
+    fi
   fi
 }
 
@@ -173,39 +225,44 @@ HTML
 }
 
 # render_demo_section <html_path>
-# Input: output HTML path. Output: appends toy diff section if testfileold/testfilenew exist.
+# Input: output HTML path. Output: appends demo diff section if enabled.
 render_demo_section() {
   local html_path="$1"
 
-  if [[ -f testfileold && -f testfilenew ]]; then
-    {
-      echo '<h2>How to read diffs?</h2>'
-      echo '<p>In the toy example below, we compare <code>testfileold</code> → <code>testfilenew</code>.'
-      echo 'Green lines are additions, red lines are deletions. Inline highlights mark changed words or whitespace.</p>'
+  [[ "$INCLUDE_DEMO" == true ]] || return 0
 
-      echo '<h3>The compared files</h3>'
-      echo '<table class="table2"><tr>'
+  local esc_old esc_new
+  esc_old="$(html_escape "$DEMO_OLD")"
+  esc_new="$(html_escape "$DEMO_NEW")"
 
-      echo '<td><h4>testfileold</h4>'
-      printf '<pre class="code">%s</pre>\n' "$(html_escape "$(cat testfileold)")"
-      echo '</td>'
+  {
+    echo '<h2>How to read diffs?</h2>'
+    echo "<p>In the toy example below, we compare <code>${esc_old}</code> → <code>${esc_new}</code>."
+    echo 'Green lines are additions, red lines are deletions. Inline highlights mark changed words or whitespace.</p>'
 
-      echo '<td><h4>testfilenew</h4>'
-      printf '<pre class="code">%s</pre>\n' "$(html_escape "$(cat testfilenew)")"
-      echo '</td>'
+    echo '<h3>The compared files</h3>'
+    echo '<table class="table2"><tr>'
 
-      echo '</tr></table>'
+    echo "<td><h4>${esc_old}</h4>"
+    printf '<pre class="code">%s</pre>\n' "$(html_escape "$(cat "$DEMO_OLD")")"
+    echo '</td>'
 
-      echo '<h3>Example diff</h3>'
-      echo '<div class="diff">'
-      git diff --no-index --no-ext-diff testfileold testfilenew \
-        | delta "${DELTA_DEMO_OPTIONS[@]}" --syntax-theme="$DELTA_THEME" \
-        | aha --line-fix || true
-      echo '</div>'
-      echo '<hr class="sep">'
-      echo '<div class="pagebreak"></div>'
-    } >> "$html_path"
-  fi
+    echo "<td><h4>${esc_new}</h4>"
+    printf '<pre class="code">%s</pre>\n' "$(html_escape "$(cat "$DEMO_NEW")")"
+    echo '</td>'
+
+    echo '</tr></table>'
+
+    echo '<h3>Example diff</h3>'
+    echo '<div class="diff">'
+    # --no-index lets us diff two paths outside git; `|| true` so nonzero diff exit won’t kill the script.
+    git diff --no-index --no-ext-diff "$DEMO_OLD" "$DEMO_NEW" \
+      | delta "${DELTA_DEMO_OPTIONS[@]}" --syntax-theme="$DELTA_THEME" \
+      | aha --line-fix || true
+    echo '</div>'
+    echo '<hr class="sep">'
+    echo '<div class="pagebreak"></div>'
+  } >> "$html_path"
 }
 
 # render_commit_block <html_path> <commit_sha> <workdir>
@@ -238,7 +295,7 @@ render_commit_block() {
       | aha --line-fix > "$diff_html_snippet"; then
     echo "Warning: diff for ${commit_abbr} failed; including plain text." >&2
     git diff --no-ext-diff "${parent}" "${commit_sha}" \
-      | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' \
+      | html_escape "$(cat)" \
       | awk 'BEGIN{print "<pre class=\"diff\"><code>"} {print} END{print "</code></pre>"}' > "$diff_html_snippet"
   fi
 
@@ -290,6 +347,7 @@ main() {
   parse_args "$@"
   check_dependencies
   validate_commits
+  validate_demo_files
 
   WORKDIR="$(mktemp -d)"
   HTML="${WORKDIR}/report.html"
