@@ -6,7 +6,9 @@ set -euo pipefail
 # Usage:
 #   git-diff-report.sh [-o output.pdf] <A> <B>
 #
-# Dependencies: git, delta, aha, wkhtmltopdf
+# Dependencies:
+#   Required: git
+#   Optional: delta, aha, wkhtmltopdf
 #
 # Notes:
 # - Validates that A is an ancestor of B.
@@ -18,6 +20,13 @@ set -euo pipefail
 usage() {
   echo "Usage: $0 [-o output.pdf] <A> <B>"
   echo "  -o, --output   Output PDF file (default: diff-report.pdf)"
+  echo "                 If wkhtmltopdf is not available, writes HTML instead."
+  echo ""
+  echo "Rendering modes:"
+  echo "  - Color HTML diff mode: requires both delta + aha"
+  echo "  - Plain HTML diff mode: used automatically when delta and/or aha are missing"
+  echo "  - PDF output mode: requires wkhtmltopdf"
+  echo "  - HTML-only mode: used automatically when wkhtmltopdf is missing"
   echo ""
   echo "Range semantics:"
   echo "  - A must be an ancestor of B."
@@ -66,12 +75,43 @@ done
 : "${B_COMMIT:?Missing B}"
 
 # Check deps
-for cmd in git delta aha wkhtmltopdf; do
-  if ! command -v "$cmd" >/dev/null 2>&1; then
-    echo "Error: '$cmd' not found in PATH." >&2
-    exit 2
-  fi
-done
+if ! command -v git >/dev/null 2>&1; then
+  echo "Error: required dependency 'git' not found in PATH." >&2
+  exit 2
+fi
+
+HAS_DELTA=false
+HAS_AHA=false
+HAS_WKHTMLTOPDF=false
+
+if command -v delta >/dev/null 2>&1; then
+  HAS_DELTA=true
+fi
+if command -v aha >/dev/null 2>&1; then
+  HAS_AHA=true
+fi
+if command -v wkhtmltopdf >/dev/null 2>&1; then
+  HAS_WKHTMLTOPDF=true
+fi
+
+if [[ "$HAS_DELTA" == true && "$HAS_AHA" == true ]]; then
+  DIFF_MODE="color-html (delta + aha)"
+else
+  DIFF_MODE="plain-html (<pre> escaped; delta/aha unavailable)"
+fi
+
+if [[ "$HAS_WKHTMLTOPDF" == true ]]; then
+  OUTPUT_MODE="pdf (wkhtmltopdf)"
+else
+  OUTPUT_MODE="html-only (wkhtmltopdf unavailable)"
+fi
+
+echo "[git-diff-report] Diff rendering mode: ${DIFF_MODE}"
+echo "[git-diff-report] Output mode: ${OUTPUT_MODE}"
+
+html_escape() {
+  sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
+}
 
 # Verify commits
 if ! git rev-parse --verify --quiet "$A_COMMIT^{commit}" >/dev/null; then
@@ -190,9 +230,15 @@ if [[ -f testfileold && -f testfilenew ]]; then
     echo '<h3>Example diff</h3>'
     echo '<div class="diff">'
     # --no-index lets us diff two paths outside git; add `|| true` so a nonzero diff exit won’t kill the script.
-    git diff --no-index --no-ext-diff testfileold testfilenew \
-      | delta --paging=never --wrap-max-lines=0 --true-color=always --syntax-theme="gruvbox-light" \
-      | aha --line-fix || true
+    if [[ "$HAS_DELTA" == true && "$HAS_AHA" == true ]]; then
+      git diff --no-index --no-ext-diff testfileold testfilenew \
+        | delta --paging=never --wrap-max-lines=0 --true-color=always --syntax-theme="gruvbox-light" \
+        | aha --line-fix || true
+    else
+      git diff --no-index --no-ext-diff testfileold testfilenew \
+        | html_escape \
+        | awk 'BEGIN{print "<pre class=\"diff\"><code>"} {print} END{print "</code></pre>"}' || true
+    fi
     echo '</div>'
     echo '<hr class="sep">'
 	echo '<div class="pagebreak"></div>'
@@ -211,8 +257,15 @@ if [[ ${#COMMITS[@]} -eq 0 ]]; then
 <p>No commits found in the specified range.</p>
 </body></html>
 HTML
-  wkhtmltopdf "$HTML" "$OUTPUT"
-  echo "Wrote empty report to ${OUTPUT}"
+  if [[ "$HAS_WKHTMLTOPDF" == true ]]; then
+    wkhtmltopdf "$HTML" "$OUTPUT"
+    echo "Wrote empty report to ${OUTPUT}"
+  else
+    HTML_OUTPUT="${OUTPUT%.pdf}.html"
+    cp "$HTML" "$HTML_OUTPUT"
+    echo "⚠️ wkhtmltopdf not found. Wrote empty HTML report instead: ${HTML_OUTPUT}"
+    echo "   Convert later with: wkhtmltopdf ${HTML_OUTPUT} ${OUTPUT}"
+  fi
   exit 0
 fi
 
@@ -239,18 +292,23 @@ for C in "${COMMITS[@]}"; do
   # Diff with delta (ANSI color), then convert to HTML snippet
   # We set width to something large to avoid wrapped lines from delta itself.
   DIFF_HTML_SNIPPET="$WORKDIR/diff-${C_ABBR}.html"
-  if ! git diff --no-ext-diff "${PARENT}" "${C}" \
-      | delta \
+  if [[ "$HAS_DELTA" == true && "$HAS_AHA" == true ]]; then
+    if ! git diff --no-ext-diff "${PARENT}" "${C}" \
+        | delta \
 	  		--paging=never \
 			--wrap-max-lines=0 \
 			--width=200 \
 			--true-color=always \
 			--syntax-theme="gruvbox-light" \
-      | aha --line-fix > "$DIFF_HTML_SNIPPET"; then
-    echo "Warning: diff for ${C_ABBR} failed; including plain text." >&2
-    # Fallback: plain text without colors
+        | aha --line-fix > "$DIFF_HTML_SNIPPET"; then
+      echo "Warning: diff for ${C_ABBR} failed; including plain text." >&2
+      git diff --no-ext-diff "${PARENT}" "${C}" \
+        | html_escape \
+        | awk 'BEGIN{print "<pre class=\"diff\"><code>"} {print} END{print "</code></pre>"}' > "$DIFF_HTML_SNIPPET"
+    fi
+  else
     git diff --no-ext-diff "${PARENT}" "${C}" \
-      | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' \
+      | html_escape \
       | awk 'BEGIN{print "<pre class=\"diff\"><code>"} {print} END{print "</code></pre>"}' > "$DIFF_HTML_SNIPPET"
   fi
 
@@ -281,7 +339,13 @@ cat >> "$HTML" <<'HTML'
 </html>
 HTML
 
-# Produce PDF
-wkhtmltopdf "$HTML" "$OUTPUT"
-
-echo "✅ Wrote report to: ${OUTPUT}"
+if [[ "$HAS_WKHTMLTOPDF" == true ]]; then
+  # Produce PDF
+  wkhtmltopdf "$HTML" "$OUTPUT"
+  echo "✅ Wrote report to: ${OUTPUT}"
+else
+  HTML_OUTPUT="${OUTPUT%.pdf}.html"
+  cp "$HTML" "$HTML_OUTPUT"
+  echo "⚠️ wkhtmltopdf not found. Wrote HTML report instead: ${HTML_OUTPUT}"
+  echo "   Convert later with: wkhtmltopdf ${HTML_OUTPUT} ${OUTPUT}"
+fi
