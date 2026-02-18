@@ -14,8 +14,9 @@ readonly DELTA_COMMIT_OPTIONS=(--paging=never --wrap-max-lines=0 --width=200 --t
 
 usage() {
   local exit_code="${1:-1}"
-  echo "Usage: $0 [-o output.pdf] [--include-demo [--demo-old path --demo-new path]] <A> <B>"
+  echo "Usage: $0 [-o output.pdf] [--force] [--include-demo [--demo-old path --demo-new path]] <A> <B>"
   echo "  -o, --output        Output PDF file (default: ${DEFAULT_OUTPUT_FILENAME})"
+  echo "      --force         Overwrite output file if it already exists"
   echo "      --include-demo  Include an optional demo section that explains diff colors"
   echo "      --demo-old      Path to demo old file (default: testfileold, requires --include-demo)"
   echo "      --demo-new      Path to demo new file (default: testfilenew, requires --include-demo)"
@@ -46,6 +47,7 @@ html_escape_stream() {
 
 # Defaults
 OUTPUT="$DEFAULT_OUTPUT_FILENAME"
+FORCE_OVERWRITE=0
 INCLUDE_DEMO=false
 DEMO_OLD="testfileold"
 DEMO_NEW="testfilenew"
@@ -56,6 +58,37 @@ B_COMMIT=""
 HAS_DELTA=false
 HAS_AHA=false
 HAS_WKHTMLTOPDF=false
+
+prevent_overwrites() {
+	# Guardrails for accidental destructive writes.
+	REPO_TOPLEVEL="$(git rev-parse --show-toplevel)"
+	if [[ "$1" == "$REPO_TOPLEVEL"/* ]]; then
+	  OUTPUT_REL_TO_REPO="${1#"$REPO_TOPLEVEL"/}"
+	  if git ls-files --error-unmatch -- "$OUTPUT_REL_TO_REPO" >/dev/null 2>&1; then
+		echo "Warning: output target is a tracked file in this repository: $1" >&2
+		echo "Refusing to overwrite tracked files. Choose a different output path." >&2
+		exit 2
+	  fi
+	fi
+	
+	if [[ "$2" -eq 1 ]]; then
+		FILE="$1"
+	elif [[ "$2" -eq 0 ]]; then
+		FILE="${1%.pdf}.html"
+	else
+		echo "fatal error, unknown internal option" >&2
+		exit 1
+	fi
+	
+
+	if [[ -e "$1" && "$FORCE_OVERWRITE" -ne 1 ]]; then
+	  echo "Warning: output file already exists: $1" >&2
+	  echo "Refusing to overwrite without --force." >&2
+	  exit 2
+	fi
+
+	echo "Output target (absolute): $1"
+}
 
 parse_args() {
   OUTPUT="$DEFAULT_OUTPUT_FILENAME"
@@ -73,6 +106,10 @@ parse_args() {
         OUTPUT="$1"
         shift
         ;;
+	-f|--force)
+		FORCE_OVERWRITE=1
+		shift
+		;;
       --include-demo)
         INCLUDE_DEMO=true
         shift
@@ -119,7 +156,18 @@ parse_args() {
     echo "Error: --demo-old/--demo-new require --include-demo." >&2
     usage
   fi
+
+	# Normalize output path once so all write-sites use the same target.
+	if command -v realpath >/dev/null 2>&1; then
+	  OUTPUT_ABS="$(realpath -m "$OUTPUT")"
+	else
+	  OUTPUT_ABS="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$OUTPUT")"
+	fi
+
+	prevent_overwrites "$OUTPUT_ABS" 0
+
 }
+
 
 check_dependencies() {
   if ! command -v git >/dev/null 2>&1; then
@@ -370,11 +418,12 @@ main() {
   generate_diff_html "$html" "$workdir"
 
   if [[ "$HAS_WKHTMLTOPDF" == true ]]; then
-    wkhtmltopdf "$html" "$OUTPUT"
-    echo "✅ Wrote report to: ${OUTPUT}"
+    wkhtmltopdf "$html" "$OUTPUT_ABS"
+    echo "✅ Wrote report to: ${OUTPUT_ABS}"
   else
     local html_out
-    html_out="${OUTPUT%.pdf}.html"
+    html_out="${OUTPUT_ABS%.pdf}.html"
+	prevent_overwrites "$html_out" 1
     cp "$html" "$html_out"
     echo "⚠️ wkhtmltopdf not found. Wrote HTML report instead: ${html_out}"
     echo "   Convert later with: wkhtmltopdf ${html_out} ${OUTPUT}"
