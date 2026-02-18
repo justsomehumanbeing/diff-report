@@ -3,8 +3,12 @@
 # git-diff-report.sh
 # Build a pretty PDF report of per-commit diffs along first-parent from A (exclusive) to B (inclusive).
 # Optional: include a demo "how to read diffs" section comparing two standalone files.
+# Optional: drive the commit list via a "history plan" (like an interactive rebase todo).
+#
 # Usage:
-#   git-diff-report.sh [-o output.pdf] [--include-demo [--demo-old path --demo-new path]] <A> <B>
+#   git-diff-report.sh [-o output.pdf] [--force]
+#     [--include-demo [--demo-old path --demo-new path]]
+#     [--interactive [<A> [<B>]] | --history-plan-file <file> | --history-plan-stdin | <A> <B>]
 
 readonly DEFAULT_OUTPUT_FILENAME="diff-report.pdf"
 readonly EMPTY_TREE_HASH="4b825dc642cb6eb9a060e54bf8d69288fbee4904"
@@ -14,18 +18,29 @@ readonly DELTA_COMMIT_OPTIONS=(--paging=never --wrap-max-lines=0 --width=200 --t
 
 usage() {
 	local exit_code="${1:-1}"
-	echo "Usage: $0 [-o output.pdf] [--force] [--include-demo [--demo-old path --demo-new path]] <A> <B>"
-	echo "  -o, --output        Output PDF file (default: ${DEFAULT_OUTPUT_FILENAME})"
-	echo "      --force         Overwrite output file if it already exists"
-	echo "      --include-demo  Include an optional demo section that explains diff colors"
-	echo "      --demo-old      Path to demo old file (default: testfileold, requires --include-demo)"
-	echo "      --demo-new      Path to demo new file (default: testfilenew, requires --include-demo)"
+	echo "Usage: $0 [-o output.pdf] [--force] [--include-demo [--demo-old path --demo-new path]] [--interactive [<A> [<B>]] | --history-plan-file <file> | --history-plan-stdin | <A> <B>]"
+	echo "  -o, --output                 Output PDF file (default: ${DEFAULT_OUTPUT_FILENAME})"
+	echo "      --force                  Overwrite output file if it already exists"
+	echo "      --include-demo           Include an optional demo section that explains diff colors"
+	echo "      --demo-old <path>        Path to demo old file (default: testfileold, requires --include-demo)"
+	echo "      --demo-new <path>        Path to demo new file (default: testfilenew, requires --include-demo)"
+	echo "      --interactive [<A> [<B>]]"
+	echo "                              Open a commit-plan in \$EDITOR (defaults to root..HEAD)"
+	echo "      --history-plan-file <file>"
+	echo "                              Read non-interactive history plan from file"
+	echo "      --history-plan-stdin"
+	echo "                              Read non-interactive history plan from stdin"
 	echo ""
 	echo "Range semantics:"
 	echo "  - A must be an ancestor of B."
 	echo "  - A must be on B's first-parent chain."
-	echo "  - Commits are collected from A..B on first-parent history"
+	echo "  - Default commit list is A..B on first-parent history"
 	echo "    (A excluded, B included, oldest → newest)."
+	echo ""
+	echo "History plan format (like git rebase --todo):"
+	echo "  - Lines: 'pick <sha> <subject...>'"
+	echo "  - Comments (# ...) and blank lines are ignored"
+	echo "  - Any non-'pick' command is treated as 'skip' (drop)"
 	echo ""
 	echo "Rendering modes:"
 	echo "  - Color HTML diff mode: requires delta + aha"
@@ -47,12 +62,19 @@ html_escape_stream() {
 
 # Defaults
 OUTPUT="$DEFAULT_OUTPUT_FILENAME"
+OUTPUT_ABS=""
 FORCE_OVERWRITE=0
 INCLUDE_DEMO=false
 DEMO_OLD="testfileold"
 DEMO_NEW="testfilenew"
 A_COMMIT=""
 B_COMMIT=""
+
+# History plan controls
+INTERACTIVE_MODE=0
+HISTORY_PLAN_SOURCE=""   # "", interactive, file, stdin
+HISTORY_PLAN_FILE=""
+HISTORY_PLAN_CONTENT=""
 
 # Dependency flags (set by check_dependencies)
 HAS_DELTA=false
@@ -91,11 +113,17 @@ prevent_overwrites() {
 
 parse_args() {
 	OUTPUT="$DEFAULT_OUTPUT_FILENAME"
+	OUTPUT_ABS=""
+	FORCE_OVERWRITE=0
 	INCLUDE_DEMO=false
 	DEMO_OLD="testfileold"
 	DEMO_NEW="testfilenew"
 	A_COMMIT=""
 	B_COMMIT=""
+	INTERACTIVE_MODE=0
+	HISTORY_PLAN_SOURCE=""
+	HISTORY_PLAN_FILE=""
+	HISTORY_PLAN_CONTENT=""
 
 	while [[ $# -gt 0 ]]; do
 		case "$1" in
@@ -125,6 +153,52 @@ parse_args() {
 			DEMO_NEW="$1"
 			shift
 			;;
+		--interactive)
+			if [[ -n "$HISTORY_PLAN_SOURCE" && "$HISTORY_PLAN_SOURCE" != "interactive" ]]; then
+				echo "Error: --interactive cannot be combined with --history-plan-*" >&2
+				usage
+			fi
+			HISTORY_PLAN_SOURCE="interactive"
+			INTERACTIVE_MODE=1
+			shift
+
+			# Optional inline A and B after --interactive
+			if [[ $# -gt 0 && "$1" != -* ]]; then
+				if [[ -n "${A_COMMIT:-}" ]]; then
+					echo "Error: duplicate A commit provided (positional and --interactive)." >&2
+					usage
+				fi
+				A_COMMIT="$1"
+				shift
+				if [[ $# -gt 0 && "$1" != -* ]]; then
+					if [[ -n "${B_COMMIT:-}" ]]; then
+						echo "Error: duplicate B commit provided (positional and --interactive)." >&2
+						usage
+					fi
+					B_COMMIT="$1"
+					shift
+				fi
+			fi
+			;;
+		--history-plan-file | --detailed-commit-history-file)
+			if [[ -n "$HISTORY_PLAN_SOURCE" && "$HISTORY_PLAN_SOURCE" != "file" ]]; then
+				echo "Error: choose at most one history plan source (interactive, file, or stdin)." >&2
+				usage
+			fi
+			HISTORY_PLAN_SOURCE="file"
+			shift
+			[[ $# -gt 0 ]] || usage
+			HISTORY_PLAN_FILE="$1"
+			shift
+			;;
+		--history-plan-stdin | --detailed-commit-history-stdin)
+			if [[ -n "$HISTORY_PLAN_SOURCE" && "$HISTORY_PLAN_SOURCE" != "stdin" ]]; then
+				echo "Error: choose at most one history plan source (interactive, file, or stdin)." >&2
+				usage
+			fi
+			HISTORY_PLAN_SOURCE="stdin"
+			shift
+			;;
 		-h | --help)
 			usage 0
 			;;
@@ -147,8 +221,36 @@ parse_args() {
 		esac
 	done
 
+	if [[ "$INTERACTIVE_MODE" -eq 1 ]]; then
+		if [[ -z "${B_COMMIT:-}" ]]; then
+			B_COMMIT="HEAD"
+		fi
+		if [[ -z "${A_COMMIT:-}" ]]; then
+			A_COMMIT="$(git rev-list --max-parents=0 "$B_COMMIT" | tail -n 1)"
+		fi
+	fi
+
 	: "${A_COMMIT:?Missing A}"
 	: "${B_COMMIT:?Missing B}"
+
+	case "$HISTORY_PLAN_SOURCE" in
+	file)
+		if [[ ! -f "$HISTORY_PLAN_FILE" ]]; then
+			echo "Error: history plan file not found: $HISTORY_PLAN_FILE" >&2
+			exit 2
+		fi
+		HISTORY_PLAN_CONTENT="$(cat "$HISTORY_PLAN_FILE")"
+		;;
+	stdin)
+		HISTORY_PLAN_CONTENT="$(cat)"
+		;;
+	interactive|"")
+		;;
+	*)
+		echo "fatal error, unknown history plan source: $HISTORY_PLAN_SOURCE" >&2
+		exit 1
+		;;
+	esac
 
 	# demo args validation
 	if [[ "$INCLUDE_DEMO" != true && ("$DEMO_OLD" != "testfileold" || "$DEMO_NEW" != "testfilenew") ]]; then
@@ -226,6 +328,87 @@ validate_demo_files() {
 			exit 2
 		fi
 	fi
+}
+
+synthesize_default_history_plan() {
+	if [[ -n "$HISTORY_PLAN_SOURCE" ]]; then
+		return 0
+	fi
+
+	local commits sha subject
+	mapfile -t commits < <(git rev-list --first-parent --reverse "${A_COMMIT}..${B_COMMIT}")
+	HISTORY_PLAN_CONTENT=""
+	for sha in "${commits[@]}"; do
+		subject="$(git show -s --format='%s' "$sha")"
+		HISTORY_PLAN_CONTENT+="pick ${sha} ${subject}"$'\n'
+	done
+}
+
+interactive_edit_history_plan() {
+	[[ "$INTERACTIVE_MODE" -eq 1 ]] || return 0
+
+	local editor
+	editor="${GIT_SEQUENCE_EDITOR:-${VISUAL:-${EDITOR:-}}}"
+	if [[ -z "$editor" ]]; then
+		echo "Warning: --interactive requested, but no \$EDITOR found. Proceeding non-interactively." >&2
+		return 0
+	fi
+
+	local tmp
+	tmp="$(mktemp)"
+	trap 'rm -f "'$tmp'"' RETURN
+
+	{
+		echo "# Edit this plan." 
+		echo "# Keep commits with 'pick'." 
+		echo "# Any other command (or deleting the line) will skip that commit." 
+		echo "# Range: ${A_COMMIT}..${B_COMMIT} (first-parent)." 
+		echo "" 
+		printf '%s' "$HISTORY_PLAN_CONTENT"
+	} >"$tmp"
+
+	"$editor" "$tmp"
+	HISTORY_PLAN_CONTENT="$(cat "$tmp")"
+}
+
+history_plan_to_commit_list() {
+	# Writes one SHA per line to stdout.
+	# Ignores comments and blank lines.
+	# Keeps only 'pick <sha> ...' lines.
+	awk '
+		/^[[:space:]]*#/ { next }
+		/^[[:space:]]*$/ { next }
+		{
+			cmd=$1
+			sha=$2
+			if (cmd == "pick" && sha ~ /^[0-9a-fA-F]{7,40}$/) {
+				print sha
+			}
+		}
+	' <<<"$HISTORY_PLAN_CONTENT"
+}
+
+validate_history_plan_commits() {
+	# Ensure all picked commits are valid and are inside A..B first-parent range.
+	local allowed_file picked_file
+	allowed_file="$(mktemp)"
+	picked_file="$(mktemp)"
+	trap 'rm -f "'$allowed_file'" "'$picked_file'"' RETURN
+
+	git rev-list --first-parent "${A_COMMIT}..${B_COMMIT}" >"$allowed_file"
+	history_plan_to_commit_list >"$picked_file"
+
+	local sha
+	while IFS= read -r sha; do
+		if ! git rev-parse --verify --quiet "${sha}^{commit}" >/dev/null; then
+			echo "Error: history plan contains invalid commit: $sha" >&2
+			exit 2
+		fi
+		if ! grep -Fxq "$(git rev-parse "$sha^{commit}")" "$allowed_file"; then
+			echo "Error: history plan commit not in range ${A_COMMIT}..${B_COMMIT} (first-parent): $sha" >&2
+			exit 2
+		fi
+	done <"$picked_file"
 }
 
 render_html_header() {
@@ -377,9 +560,15 @@ generate_diff_html() {
 	local html_path="$1"
 	local workdir="$2"
 
-	mapfile -t commits < <(git rev-list --first-parent --reverse "${A_COMMIT}..${B_COMMIT}")
+	local -a commits
+	if [[ -n "$HISTORY_PLAN_CONTENT" ]]; then
+		mapfile -t commits < <(history_plan_to_commit_list)
+	else
+		mapfile -t commits < <(git rev-list --first-parent --reverse "${A_COMMIT}..${B_COMMIT}")
+	fi
+
 	if [[ ${#commits[@]} -eq 0 ]]; then
-		echo "No commits found in ${A_COMMIT}..${B_COMMIT} (first-parent)." >&2
+		echo "No commits found (after applying history plan, if any)." >&2
 		cat >>"$html_path" <<'HTML'
 <p>No commits found in the specified range.</p>
 </body></html>
@@ -404,6 +593,13 @@ main() {
 	parse_args "$@"
 	check_dependencies
 	validate_commits
+
+	synthesize_default_history_plan
+	interactive_edit_history_plan
+	if [[ -n "$HISTORY_PLAN_CONTENT" ]]; then
+		validate_history_plan_commits
+	fi
+
 	validate_demo_files
 
 	local workdir html
@@ -421,7 +617,7 @@ main() {
 	else
 		local html_out
 		html_out="${OUTPUT_ABS%.pdf}.html"
-		prevent_overwrites "$html_out" 1
+		prevent_overwrites "$html_out"
 		cp "$html" "$html_out"
 		echo "⚠️ wkhtmltopdf not found. Wrote HTML report instead: ${html_out}"
 		echo "   Convert later with: wkhtmltopdf ${html_out} ${OUTPUT}"
