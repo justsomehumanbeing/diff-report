@@ -39,6 +39,8 @@ OUTPUT="diff-report.pdf"
 INCLUDE_DEMO=false
 DEMO_OLD="testfileold"
 DEMO_NEW="testfilenew"
+DEMO_OLD_SET=false
+DEMO_NEW_SET=false
 
 # Parse args
 if [[ $# -lt 2 ]]; then
@@ -61,12 +63,14 @@ while [[ $# -gt 0 ]]; do
       shift
       [[ $# -gt 0 ]] || usage
       DEMO_OLD="$1"
+      DEMO_OLD_SET=true
       shift
       ;;
     --demo-new)
       shift
       [[ $# -gt 0 ]] || usage
       DEMO_NEW="$1"
+      DEMO_NEW_SET=true
       shift
       ;;
     -*)
@@ -91,7 +95,7 @@ done
 : "${A_COMMIT:?Missing A}"
 : "${B_COMMIT:?Missing B}"
 
-if [[ "$INCLUDE_DEMO" != true && ( "$DEMO_OLD" != "testfileold" || "$DEMO_NEW" != "testfilenew" ) ]]; then
+if [[ "$INCLUDE_DEMO" != true && ( "$DEMO_OLD_SET" == true || "$DEMO_NEW_SET" == true ) ]]; then
   echo "Error: --demo-old/--demo-new require --include-demo." >&2
   usage
 fi
