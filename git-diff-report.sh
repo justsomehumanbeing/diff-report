@@ -56,32 +56,44 @@ parse_args() {
   DEMO_OLD="testfileold"
   DEMO_NEW="testfilenew"
 
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      -o|--output)
-        shift
-        [[ $# -gt 0 ]] || usage
-        OUTPUT="$1"
-        shift
-        ;;
-      --include-demo)
-        INCLUDE_DEMO=true
-        shift
-        ;;
-      --demo-old)
-        shift
-        [[ $# -gt 0 ]] || usage
-        DEMO_OLD="$1"
-        shift
-        ;;
-      --demo-new)
-        shift
-        [[ $# -gt 0 ]] || usage
-        DEMO_NEW="$1"
-        shift
-        ;;
-      -*)
-        echo "Unknown option: $1" >&2
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -o|--output)
+      shift
+      [[ $# -gt 0 ]] || usage
+      OUTPUT="$1"
+      shift
+      ;;
+    --include-demo)
+      INCLUDE_DEMO=true
+      shift
+      ;;
+    --demo-old)
+      shift
+      [[ $# -gt 0 ]] || usage
+      DEMO_OLD="$1"
+      DEMO_OLD_SET=true
+      shift
+      ;;
+    --demo-new)
+      shift
+      [[ $# -gt 0 ]] || usage
+      DEMO_NEW="$1"
+      DEMO_NEW_SET=true
+      shift
+      ;;
+    -*)
+      echo "Unknown option: $1"
+      usage
+      ;;
+    *)
+      # positional
+      if [[ -z "${A_COMMIT:-}" ]]; then
+        A_COMMIT="$1"
+      elif [[ -z "${B_COMMIT:-}" ]]; then
+        B_COMMIT="$1"
+      else
+        echo "Too many positional arguments."
         usage
         ;;
       *)
