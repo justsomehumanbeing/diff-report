@@ -75,7 +75,7 @@ done
 if command -v realpath >/dev/null 2>&1; then
   OUTPUT_ABS="$(realpath -m "$OUTPUT")"
 else
-  OUTPUT_ABS="$(python3 -c 'import os,sys; print(os.path.abspath(sys.argv[1]))' "$OUTPUT")"
+  OUTPUT_ABS="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$OUTPUT")"
 fi
 
 if [[ -d "$OUTPUT_ABS" ]]; then
