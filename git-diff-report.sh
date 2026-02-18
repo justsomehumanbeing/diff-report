@@ -38,9 +38,10 @@ usage() {
 	echo "    (A excluded, B included, oldest → newest)."
 	echo ""
 	echo "History plan format (like git rebase --todo):"
-	echo "  - Lines: 'pick <sha> <subject...>'"
+	echo "  - Lines: '<action> <sha> [%annotation] [# message]'"
+	echo "  - Valid actions: pick, drop, squash, bundle"
 	echo "  - Comments (# ...) and blank lines are ignored"
-	echo "  - Any non-'pick' command is treated as 'skip' (drop)"
+	echo "  - Bundle runs: first bundle line must include '%SECTION NAME'"
 	echo ""
 	echo "Rendering modes:"
 	echo "  - Color HTML diff mode: requires delta + aha"
@@ -75,6 +76,7 @@ INTERACTIVE_MODE=0
 HISTORY_PLAN_SOURCE=""   # "", interactive, file, stdin
 HISTORY_PLAN_FILE=""
 HISTORY_PLAN_CONTENT=""
+HISTORY_PLAN_PARSED_TSV=""
 
 # Dependency flags (set by check_dependencies)
 HAS_DELTA=false
@@ -124,6 +126,7 @@ parse_args() {
 	HISTORY_PLAN_SOURCE=""
 	HISTORY_PLAN_FILE=""
 	HISTORY_PLAN_CONTENT=""
+	HISTORY_PLAN_PARSED_TSV=""
 
 	while [[ $# -gt 0 ]]; do
 		case "$1" in
@@ -340,7 +343,7 @@ synthesize_default_history_plan() {
 	HISTORY_PLAN_CONTENT=""
 	for sha in "${commits[@]}"; do
 		subject="$(git show -s --format='%s' "$sha")"
-		HISTORY_PLAN_CONTENT+="pick ${sha} ${subject}"$'\n'
+		HISTORY_PLAN_CONTENT+="pick ${sha} # ${subject}"$'\n'
 	done
 }
 
@@ -359,11 +362,11 @@ interactive_edit_history_plan() {
 	trap 'rm -f "'$tmp'"' RETURN
 
 	{
-		echo "# Edit this plan." 
-		echo "# Keep commits with 'pick'." 
-		echo "# Any other command (or deleting the line) will skip that commit." 
-		echo "# Range: ${A_COMMIT}..${B_COMMIT} (first-parent)." 
-		echo "" 
+		echo "# Edit this plan."
+		echo "# Actions: pick|drop|squash|bundle <sha> [%annotation] [# message]"
+		echo "# Bundle runs require %SECTION on the first contiguous bundle line."
+		echo "# Range: ${A_COMMIT}..${B_COMMIT} (first-parent)."
+		echo ""
 		printf '%s' "$HISTORY_PLAN_CONTENT"
 	} >"$tmp"
 
@@ -371,44 +374,131 @@ interactive_edit_history_plan() {
 	HISTORY_PLAN_CONTENT="$(cat "$tmp")"
 }
 
-history_plan_to_commit_list() {
-	# Writes one SHA per line to stdout.
-	# Ignores comments and blank lines.
-	# Keeps only 'pick <sha> ...' lines.
-	awk '
-		/^[[:space:]]*#/ { next }
-		/^[[:space:]]*$/ { next }
-		{
-			cmd=$1
-			sha=$2
-			if (cmd == "pick" && sha ~ /^[0-9a-fA-F]{7,40}$/) {
-				print sha
-			}
-		}
-	' <<<"$HISTORY_PLAN_CONTENT"
+history_plan_parse_error() {
+	local line_no="$1"
+	local line_content="$2"
+	local message="$3"
+	echo "Error: history plan line ${line_no}: ${message}" >&2
+	echo "  Offending line: ${line_content}" >&2
+	exit 2
 }
 
-validate_history_plan_commits() {
-	# Ensure all picked commits are valid and are inside A..B first-parent range.
-	local allowed_file picked_file
-	allowed_file="$(mktemp)"
-	picked_file="$(mktemp)"
-	trap 'rm -f "'$allowed_file'" "'$picked_file'"' RETURN
+parse_history_plan_records() {
+	# Produces machine-friendly TSV rows:
+	# action<TAB>resolved_sha<TAB>reason<TAB>section_name<TAB>display_message
+	local -a range_commits
+	mapfile -t range_commits < <(git rev-list --first-parent --reverse "${A_COMMIT}..${B_COMMIT}")
 
-	git rev-list --first-parent "${A_COMMIT}..${B_COMMIT}" >"$allowed_file"
-	history_plan_to_commit_list >"$picked_file"
+	local -A range_index=()
+	local idx sha
+	for idx in "${!range_commits[@]}"; do
+		sha="${range_commits[$idx]}"
+		range_index["$sha"]="$idx"
+	done
 
-	local sha
-	while IFS= read -r sha; do
-		if ! git rev-parse --verify --quiet "${sha}^{commit}" >/dev/null; then
-			echo "Error: history plan contains invalid commit: $sha" >&2
-			exit 2
+	local line_no=0
+	local last_index=-1
+	local last_action=""
+	local current_bundle_section=""
+	local rows=""
+	local -A seen_commits=()
+	local line raw action short_sha tail resolved_sha annotation message reason section_name
+
+	while IFS= read -r line || [[ -n "$line" ]]; do
+		line_no=$((line_no + 1))
+		raw="$line"
+
+		if [[ "$line" =~ ^[[:space:]]*$ ]] || [[ "$line" =~ ^[[:space:]]*# ]]; then
+			continue
 		fi
-		if ! grep -Fxq "$(git rev-parse "$sha^{commit}")" "$allowed_file"; then
-			echo "Error: history plan commit not in range ${A_COMMIT}..${B_COMMIT} (first-parent): $sha" >&2
-			exit 2
+
+		if [[ ! "$line" =~ ^[[:space:]]*([[:alpha:]]+)[[:space:]]+([0-9a-fA-F]{7,40})([[:space:]].*)?$ ]]; then
+			history_plan_parse_error "$line_no" "$raw" "expected '<action> <hash> [%annotation] [# message]'"
 		fi
-	done <"$picked_file"
+
+		action="${BASH_REMATCH[1]}"
+		short_sha="${BASH_REMATCH[2]}"
+		tail="${BASH_REMATCH[3]}"
+
+		case "$action" in
+		pick|drop|squash|bundle) ;;
+		*) history_plan_parse_error "$line_no" "$raw" "invalid action '${action}' (expected pick/drop/squash/bundle)" ;;
+		esac
+
+		if ! resolved_sha="$(git rev-parse --verify --quiet "${short_sha}^{commit}")"; then
+			history_plan_parse_error "$line_no" "$raw" "invalid commit hash '${short_sha}'"
+		fi
+		if [[ -z "${range_index[$resolved_sha]+x}" ]]; then
+			history_plan_parse_error "$line_no" "$raw" "commit '${short_sha}' not in ${A_COMMIT}..${B_COMMIT} first-parent range"
+		fi
+		if [[ -n "${seen_commits[$resolved_sha]+x}" ]]; then
+			history_plan_parse_error "$line_no" "$raw" "commit '${short_sha}' appears more than once"
+		fi
+		if (( range_index[$resolved_sha] <= last_index )); then
+			history_plan_parse_error "$line_no" "$raw" "commit order does not match ${A_COMMIT}..${B_COMMIT} first-parent order"
+		fi
+		seen_commits["$resolved_sha"]=1
+		last_index="${range_index[$resolved_sha]}"
+
+		tail="${tail:-}"
+		tail="${tail#${tail%%[![:space:]]*}}"
+		annotation=""
+		message=""
+		if [[ -n "$tail" ]]; then
+			if [[ "$tail" =~ ^%([^#]*[^[:space:]#]|[^#[:space:]])[[:space:]]*(#(.*))?$ ]]; then
+				annotation="${BASH_REMATCH[1]}"
+				message="${BASH_REMATCH[4]}"
+			elif [[ "$tail" =~ ^#[[:space:]]*(.*)$ ]]; then
+				message="${BASH_REMATCH[1]}"
+			else
+				history_plan_parse_error "$line_no" "$raw" "could not parse annotation/message segment '${tail}'"
+			fi
+		fi
+
+		reason=""
+		section_name=""
+		case "$action" in
+		drop)
+			reason="$annotation"
+			last_action="$action"
+			current_bundle_section=""
+			;;
+		bundle)
+			if [[ "$last_action" != "bundle" ]]; then
+				if [[ -z "$annotation" ]]; then
+					history_plan_parse_error "$line_no" "$raw" "first commit in a bundle run must include %SECTION"
+				fi
+				current_bundle_section="$annotation"
+			elif [[ -n "$annotation" ]]; then
+				current_bundle_section="$annotation"
+			fi
+			section_name="$current_bundle_section"
+			last_action="$action"
+			;;
+		pick|squash)
+			if [[ -n "$annotation" ]]; then
+				history_plan_parse_error "$line_no" "$raw" "annotation '%${annotation}' is only valid for drop/bundle"
+			fi
+			last_action="$action"
+			current_bundle_section=""
+			;;
+		esac
+
+		rows+="${action}"$'\t'"${resolved_sha}"$'\t'"${reason}"$'\t'"${section_name}"$'\t'"${message}"$'\n'
+	done <<<"$HISTORY_PLAN_CONTENT"
+
+	HISTORY_PLAN_PARSED_TSV="$rows"
+}
+
+history_plan_to_commit_list() {
+	# Writes one SHA per line to stdout (excluding drop actions).
+	local action sha _reason _section _message
+	while IFS=$'	' read -r action sha _reason _section _message; do
+		[[ -n "$action" ]] || continue
+		if [[ "$action" != "drop" ]]; then
+			echo "$sha"
+		fi
+	done <<<"$HISTORY_PLAN_PARSED_TSV"
 }
 
 render_html_header() {
@@ -597,7 +687,7 @@ main() {
 	synthesize_default_history_plan
 	interactive_edit_history_plan
 	if [[ -n "$HISTORY_PLAN_CONTENT" ]]; then
-		validate_history_plan_commits
+		parse_history_plan_records
 	fi
 
 	validate_demo_files
