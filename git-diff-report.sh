@@ -93,6 +93,8 @@ HAS_WKHTMLTOPDF=false
 
 prevent_overwrites() {
 	# Guardrails for accidental destructive writes.
+	# $2 indicates whether this is the HTML fallback (so $2==1 means that we are in the fallback).
+	# This is relevant because else we check for the wrong files in the overwrite protection.
 	REPO_TOPLEVEL="$(git rev-parse --show-toplevel)"
 	if [[ "$1" == "$REPO_TOPLEVEL"/* ]]; then
 		OUTPUT_REL_TO_REPO="${1#"$REPO_TOPLEVEL"/}"
@@ -103,9 +105,9 @@ prevent_overwrites() {
 		fi
 	fi
 
-	if [[ "$2" -eq 1 ]]; then
+	if [[ "$2" -eq 0 ]]; then
 		FILE="$1"
-	elif [[ "$2" -eq 0 ]]; then
+	elif [[ "$2" -eq 1 ]]; then
 		FILE="${1%.pdf}.html"
 	else
 		echo "fatal error, unknown internal option" >&2
@@ -735,7 +737,7 @@ main() {
 	else
 		local html_out
 		html_out="${OUTPUT_ABS%.pdf}.html"
-		prevent_overwrites "$html_out"
+		prevent_overwrites "$html_out" 1
 		cp "$html" "$html_out"
 		echo "⚠️ wkhtmltopdf not found. Wrote HTML report instead: ${html_out}"
 		echo "   Convert later with: wkhtmltopdf ${html_out} ${OUTPUT}"
