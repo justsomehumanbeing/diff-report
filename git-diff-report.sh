@@ -954,22 +954,7 @@ HTML
 HTML
 }
 
-main() {
-	set -euo pipefail
-
-	parse_args "$@"
-	check_dependencies
-	validate_commits
-
-	synthesize_default_history_plan
-	interactive_edit_history_plan
-	if [[ -n "$HISTORY_PLAN_CONTENT" ]]; then
-		parse_history_plan_records
-	fi
-	emit_drop_cli_warning
-
-	validate_demo_files
-
+generate_output() {
 	local workdir html
 	workdir="$(mktemp -d)"
 	html="${workdir}/report.html"
@@ -990,6 +975,26 @@ main() {
 		echo "⚠️ wkhtmltopdf not found. Wrote HTML report instead: ${html_out}"
 		echo "   Convert later with: wkhtmltopdf ${html_out} ${OUTPUT}"
 	fi
+}
+
+main() {
+	set -euo pipefail
+
+	parse_args "$@"
+	check_dependencies
+	validate_commits
+
+	synthesize_default_history_plan
+	interactive_edit_history_plan
+	if [[ -n "$HISTORY_PLAN_CONTENT" ]]; then
+		parse_history_plan_records
+	fi
+	emit_drop_cli_warning
+
+	validate_demo_files
+
+	generate_output
+
 }
 
 main "$@"
