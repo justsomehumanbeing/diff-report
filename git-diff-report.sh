@@ -671,16 +671,130 @@ render_commit_block() {
 	} >>"$html_path"
 }
 
+render_drop_block() {
+	local html_path="$1"
+	local commit_sha="$2"
+	local reason="$3"
+
+	local commit_abbr author_name author_email author_date commit_msg rendered_reason
+	commit_abbr="$(git rev-parse --short "$commit_sha")"
+	rendered_reason="${reason:-no reason provided}"
+
+	{
+		IFS= read -r -d '' author_name
+		IFS= read -r -d '' author_email
+		IFS= read -r -d '' author_date
+		IFS= read -r -d '' commit_msg
+	} < <(git log -1 --date=iso-strict --format='%an%x00%ae%x00%ad%x00%B%x00' "$commit_sha")
+
+	{
+		echo '<div class="commit-block">'
+		echo "  <h2>Commit: $(html_escape_arg "$commit_abbr")</h2>"
+		echo "  <p class=\"meta\"><strong>Author:</strong> $(html_escape_arg "$author_name") &lt;$(html_escape_arg "$author_email")&gt;<br>"
+		echo "  <strong>Date:</strong> $(html_escape_arg "$author_date")</p>"
+		echo '  <h3>Commit message</h3>'
+		printf '  <div class="commit-msg">%s</div>\n' "$(html_escape_arg "$commit_msg")"
+		echo '  <h3>Diff status</h3>'
+		printf '  <div class="commit-msg"><strong>Warning:</strong> %s</div>\n' "$(html_escape_arg "not showing diffs in and out of commit ${commit_abbr} because ${rendered_reason}")"
+		echo '</div>'
+	} >>"$html_path"
+}
+
+render_squash_block() {
+	local html_path="$1"
+	local workdir="$2"
+	shift 2
+	local -a squash_commits=("$@")
+
+	[[ ${#squash_commits[@]} -gt 0 ]] || return 0
+
+	local first_commit last_commit parent diff_html_snippet first_abbr last_abbr
+	first_commit="${squash_commits[0]}"
+	last_commit="${squash_commits[${#squash_commits[@]}-1]}"
+	first_abbr="$(git rev-parse --short "$first_commit")"
+	last_abbr="$(git rev-parse --short "$last_commit")"
+
+	if git rev-parse --verify --quiet "${first_commit}^1" >/dev/null; then
+		parent="${first_commit}^1"
+	else
+		parent="$EMPTY_TREE_HASH"
+	fi
+
+	diff_html_snippet="$workdir/diff-squash-${first_abbr}-${last_abbr}.html"
+	if [[ "$HAS_DELTA" == true && "$HAS_AHA" == true ]]; then
+		if ! git diff --no-ext-diff "${parent}" "${last_commit}" |
+			delta "${DELTA_COMMIT_OPTIONS[@]}" --syntax-theme="$DELTA_THEME" |
+			aha --line-fix >"$diff_html_snippet"; then
+			echo "Warning: squash diff for ${first_abbr}..${last_abbr} failed; including plain text." >&2
+			git diff --no-ext-diff "${parent}" "${last_commit}" |
+				html_escape_stream |
+				awk 'BEGIN{print "<pre class=\"diff\"><code>"} {print} END{print "</code></pre>"}' >"$diff_html_snippet"
+		fi
+	else
+		git diff --no-ext-diff "${parent}" "${last_commit}" |
+			html_escape_stream |
+			awk 'BEGIN{print "<pre class=\"diff\"><code>"} {print} END{print "</code></pre>"}' >"$diff_html_snippet"
+	fi
+
+	{
+		echo '<div class="commit-block">'
+		echo "  <h2>Squashed commits: $(html_escape_arg "$first_abbr")..$(html_escape_arg "$last_abbr")</h2>"
+		echo '  <p class="meta"><strong>Combined diff:</strong> parent(first commit) → last commit in squash run</p>'
+		echo '  <h3>Included commits</h3>'
+	} >>"$html_path"
+
+	local commit_sha commit_abbr author_name author_email author_date commit_msg
+	for commit_sha in "${squash_commits[@]}"; do
+		commit_abbr="$(git rev-parse --short "$commit_sha")"
+		{
+			IFS= read -r -d '' author_name
+			IFS= read -r -d '' author_email
+			IFS= read -r -d '' author_date
+			IFS= read -r -d '' commit_msg
+		} < <(git log -1 --date=iso-strict --format='%an%x00%ae%x00%ad%x00%B%x00' "$commit_sha")
+
+		{
+			echo "  <h4>Commit: $(html_escape_arg "$commit_abbr")</h4>"
+			echo "  <p class=\"meta\"><strong>Author:</strong> $(html_escape_arg "$author_name") &lt;$(html_escape_arg "$author_email")&gt;<br>"
+			echo "  <strong>Date:</strong> $(html_escape_arg "$author_date")</p>"
+			printf '  <div class="commit-msg">%s</div>\n' "$(html_escape_arg "$commit_msg")"
+		} >>"$html_path"
+	done
+
+	{
+		echo '  <h3>Changes (single unified diff for squash run)</h3>'
+		echo '  <div class="diff">'
+		cat "$diff_html_snippet"
+		echo '  </div>'
+		echo '</div>'
+	} >>"$html_path"
+}
+
+render_bundle_boundary() {
+	local html_path="$1"
+	local section_name="$2"
+	local boundary_type="$3"
+	local label
+
+	if [[ "$boundary_type" == "begin" ]]; then
+		label="BEGINNING OF SECTION ${section_name}"
+	else
+		label="END OF SECTION ${section_name}"
+	fi
+
+	{
+		echo '<div class="commit-block">'
+		echo "  <h2>$(html_escape_arg "$label")</h2>"
+		echo '</div>'
+	} >>"$html_path"
+}
+
 generate_diff_html() {
 	local html_path="$1"
 	local workdir="$2"
 
 	local -a commits
-	if [[ -n "$HISTORY_PLAN_CONTENT" ]]; then
-		mapfile -t commits < <(history_plan_to_commit_list)
-	else
-		mapfile -t commits < <(git rev-list --first-parent --reverse "${A_COMMIT}..${B_COMMIT}")
-	fi
+	mapfile -t commits < <(git rev-list --first-parent --reverse "${A_COMMIT}..${B_COMMIT}")
 
 	if [[ ${#commits[@]} -eq 0 ]]; then
 		echo "No commits found (after applying history plan, if any)." >&2
@@ -691,10 +805,66 @@ HTML
 		return 0
 	fi
 
-	local c
-	for c in "${commits[@]}"; do
-		render_commit_block "$html_path" "$c" "$workdir"
-	done
+	if [[ -z "$HISTORY_PLAN_PARSED_TSV" ]]; then
+		local c
+		for c in "${commits[@]}"; do
+			render_commit_block "$html_path" "$c" "$workdir"
+		done
+	else
+		local -a plan_actions=() plan_shas=() plan_reasons=() plan_sections=()
+		local action sha reason section _message
+		while IFS=$'\t' read -r action sha reason section _message; do
+			[[ -n "$action" ]] || continue
+			plan_actions+=("$action")
+			plan_shas+=("$sha")
+			plan_reasons+=("$reason")
+			plan_sections+=("$section")
+		done <<<"$HISTORY_PLAN_PARSED_TSV"
+
+		local i run_end
+		i=0
+		while ((i < ${#plan_actions[@]})); do
+			action="${plan_actions[$i]}"
+			sha="${plan_shas[$i]}"
+			reason="${plan_reasons[$i]}"
+			section="${plan_sections[$i]}"
+
+			case "$action" in
+			pick)
+				render_commit_block "$html_path" "$sha" "$workdir"
+				i=$((i + 1))
+				;;
+			drop)
+				render_drop_block "$html_path" "$sha" "$reason"
+				i=$((i + 1))
+				;;
+			squash)
+				run_end=$i
+				while ((run_end + 1 < ${#plan_actions[@]})) && [[ "${plan_actions[$((run_end + 1))]}" == "squash" ]]; do
+					run_end=$((run_end + 1))
+				done
+				local -a squash_commits=()
+				while ((i <= run_end)); do
+					squash_commits+=("${plan_shas[$i]}")
+					i=$((i + 1))
+				done
+				render_squash_block "$html_path" "$workdir" "${squash_commits[@]}"
+				;;
+			bundle)
+				run_end=$i
+				while ((run_end + 1 < ${#plan_actions[@]})) && [[ "${plan_actions[$((run_end + 1))]}" == "bundle" ]]; do
+					run_end=$((run_end + 1))
+				done
+				render_bundle_boundary "$html_path" "$section" "begin"
+				while ((i <= run_end)); do
+					render_commit_block "$html_path" "${plan_shas[$i]}" "$workdir"
+					i=$((i + 1))
+				done
+				render_bundle_boundary "$html_path" "$section" "end"
+				;;
+			esac
+		done
+	fi
 
 	cat >>"$html_path" <<'HTML'
 </body>
