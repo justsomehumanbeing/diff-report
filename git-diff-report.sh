@@ -321,8 +321,6 @@ parse_args() {
 		CONFIG[output_abs]="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "${CONFIG[output]}")"
 	fi
 
-	prevent_overwrites "${CONFIG[output_abs]}"
-
 }
 
 check_dependencies() {
