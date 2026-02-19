@@ -14,12 +14,22 @@ readonly DELTA_COMMIT_OPTIONS=(--paging=never --wrap-max-lines=0 --width=200 --t
 
 usage() {
   local exit_code="${1:-1}"
-  echo "Usage: $0 [-o output.pdf] [--force] [--include-demo [--demo-old path --demo-new path]] <A> <B>"
+  echo "Usage: $0 [-o output.pdf] [--force] [--include-demo [--demo-old path --demo-new path]] [--interactive [<A> [<B>]] | <A> <B>]"
   echo "  -o, --output        Output PDF file (default: ${DEFAULT_OUTPUT_FILENAME})"
   echo "      --force         Overwrite output file if it already exists"
   echo "      --include-demo  Include an optional demo section that explains diff colors"
   echo "      --demo-old      Path to demo old file (default: testfileold, requires --include-demo)"
   echo "      --demo-new      Path to demo new file (default: testfilenew, requires --include-demo)"
+  echo "      --interactive [<A> [<B>]]"
+  echo "                      Enable interactive commit-plan mode; defaults to root..HEAD"
+  echo "      --history-plan-file <file>"
+  echo "                      Read non-interactive history plan from file"
+  echo "      --history-plan-stdin"
+  echo "                      Read non-interactive history plan from stdin"
+  echo "      --detailed-commit-history-file <file>"
+  echo "                      Alias of --history-plan-file"
+  echo "      --detailed-commit-history-stdin"
+  echo "                      Alias of --history-plan-stdin"
   echo ""
   echo "Range semantics:"
   echo "  - A must be an ancestor of B."
@@ -53,6 +63,10 @@ DEMO_OLD="testfileold"
 DEMO_NEW="testfilenew"
 A_COMMIT=""
 B_COMMIT=""
+INTERACTIVE_MODE=0
+HISTORY_PLAN_SOURCE=""
+HISTORY_PLAN_FILE=""
+HISTORY_PLAN_CONTENT=""
 
 # Dependency flags (set by check_dependencies)
 HAS_DELTA=false
@@ -97,6 +111,10 @@ parse_args() {
   DEMO_NEW="testfilenew"
   A_COMMIT=""
   B_COMMIT=""
+  INTERACTIVE_MODE=0
+  HISTORY_PLAN_SOURCE=""
+  HISTORY_PLAN_FILE=""
+  HISTORY_PLAN_CONTENT=""
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -126,6 +144,50 @@ parse_args() {
         DEMO_NEW="$1"
         shift
         ;;
+      --interactive)
+        if [[ -n "$HISTORY_PLAN_SOURCE" && "$HISTORY_PLAN_SOURCE" != "interactive" ]]; then
+          echo "Error: interactive mode cannot be combined with another history plan source." >&2
+          usage
+        fi
+        HISTORY_PLAN_SOURCE="interactive"
+        INTERACTIVE_MODE=1
+        shift
+        if [[ $# -gt 0 && "$1" != -* ]]; then
+          if [[ -n "${A_COMMIT:-}" ]]; then
+            echo "Error: duplicate A commit provided (positional and --interactive)." >&2
+            usage
+          fi
+          A_COMMIT="$1"
+          shift
+          if [[ $# -gt 0 && "$1" != -* ]]; then
+            if [[ -n "${B_COMMIT:-}" ]]; then
+              echo "Error: duplicate B commit provided (positional and --interactive)." >&2
+              usage
+            fi
+            B_COMMIT="$1"
+            shift
+          fi
+        fi
+        ;;
+      --history-plan-file|--detailed-commit-history-file)
+        if [[ -n "$HISTORY_PLAN_SOURCE" && "$HISTORY_PLAN_SOURCE" != "file" ]]; then
+          echo "Error: choose at most one history plan source (interactive, file, or stdin)." >&2
+          usage
+        fi
+        HISTORY_PLAN_SOURCE="file"
+        shift
+        [[ $# -gt 0 ]] || usage
+        HISTORY_PLAN_FILE="$1"
+        shift
+        ;;
+      --history-plan-stdin|--detailed-commit-history-stdin)
+        if [[ -n "$HISTORY_PLAN_SOURCE" && "$HISTORY_PLAN_SOURCE" != "stdin" ]]; then
+          echo "Error: choose at most one history plan source (interactive, file, or stdin)." >&2
+          usage
+        fi
+        HISTORY_PLAN_SOURCE="stdin"
+        shift
+        ;;
       -h|--help)
         usage 0
         ;;
@@ -148,8 +210,36 @@ parse_args() {
     esac
   done
 
+  if [[ "$INTERACTIVE_MODE" -eq 1 ]]; then
+    if [[ -z "${B_COMMIT:-}" ]]; then
+      B_COMMIT="HEAD"
+    fi
+    if [[ -z "${A_COMMIT:-}" ]]; then
+      A_COMMIT="$(git rev-list --first-parent "$B_COMMIT" | tail -n 1)"
+    fi
+  fi
+
   : "${A_COMMIT:?Missing A}"
   : "${B_COMMIT:?Missing B}"
+
+  case "$HISTORY_PLAN_SOURCE" in
+    file)
+      if [[ ! -f "$HISTORY_PLAN_FILE" ]]; then
+        echo "Error: history plan file not found: $HISTORY_PLAN_FILE" >&2
+        exit 2
+      fi
+      HISTORY_PLAN_CONTENT="$(cat "$HISTORY_PLAN_FILE")"
+      ;;
+    stdin)
+      HISTORY_PLAN_CONTENT="$(cat)"
+      ;;
+    interactive|"")
+      ;;
+    *)
+      echo "fatal error, unknown history plan source: $HISTORY_PLAN_SOURCE" >&2
+      exit 1
+      ;;
+  esac
 
   # demo args validation
   if [[ "$INCLUDE_DEMO" != true && ( "$DEMO_OLD" != "testfileold" || "$DEMO_NEW" != "testfilenew" ) ]]; then
@@ -166,6 +256,20 @@ parse_args() {
 
 	prevent_overwrites "$OUTPUT_ABS" 0
 
+}
+
+synthesize_default_history_plan() {
+  if [[ -n "$HISTORY_PLAN_SOURCE" ]]; then
+    return 0
+  fi
+
+  local commits sha subject
+  mapfile -t commits < <(git rev-list --first-parent --reverse "${A_COMMIT}..${B_COMMIT}")
+  HISTORY_PLAN_CONTENT=""
+  for sha in "${commits[@]}"; do
+    subject="$(git show -s --format='%s' "$sha")"
+    HISTORY_PLAN_CONTENT+="pick ${sha} ${subject}"$'\n'
+  done
 }
 
 
@@ -406,6 +510,7 @@ main() {
   parse_args "$@"
   check_dependencies
   validate_commits
+  synthesize_default_history_plan
   validate_demo_files
 
   local workdir html
