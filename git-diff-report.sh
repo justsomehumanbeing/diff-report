@@ -72,30 +72,6 @@ html_escape_stream() {
 # Defaults
 
 declare -A CONFIG=()
-CONFIG[output]="$DEFAULT_OUTPUT_FILENAME"
-CONFIG[output_abs]=""
-CONFIG[force_overwrite]=0
-CONFIG[include_demo]=false
-CONFIG[demo_old]="testfileold"
-CONFIG[demo_new]="testfilenew"
-CONFIG[a_commit]=""
-CONFIG[b_commit]=""
-CONFIG[interactive_mode]=0
-CONFIG[history_plan_source]=""
-CONFIG[history_plan_file]=""
-CONFIG[history_plan_content]=""
-CONFIG[html_only]=0
-CONFIG[html_output]="${DEFAULT_OUTPUT_FILENAME%.pdf}.html"
-
-# History plan controls
-CONFIG[interactive_mode]=0
-CONFIG[history_plan_source]="" # "", interactive, file, stdin
-CONFIG[history_plan_file]=""
-CONFIG[history_plan_content]=""
-CONFIG[history_plan_parsed_tsv]=""
-CONFIG[plan_has_drop]=false
-CONFIG[plan_has_squash]=false
-CONFIG[plan_has_bundle]=false
 
 # Dependency flags (set by check_dependencies)
 HAS_DELTA=false
