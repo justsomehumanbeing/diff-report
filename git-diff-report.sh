@@ -85,6 +85,9 @@ HISTORY_PLAN_SOURCE="" # "", interactive, file, stdin
 HISTORY_PLAN_FILE=""
 HISTORY_PLAN_CONTENT=""
 HISTORY_PLAN_PARSED_TSV=""
+PLAN_HAS_DROP=false
+PLAN_HAS_SQUASH=false
+PLAN_HAS_BUNDLE=false
 
 # Dependency flags (set by check_dependencies)
 HAS_DELTA=false
@@ -137,6 +140,9 @@ parse_args() {
 	HISTORY_PLAN_CONTENT=""
 	FORCE_OVERWRITE=0
 	HISTORY_PLAN_PARSED_TSV=""
+	PLAN_HAS_DROP=false
+	PLAN_HAS_SQUASH=false
+	PLAN_HAS_BUNDLE=false
 
 	while [[ $# -gt 0 ]]; do
 		case "$1" in
@@ -446,6 +452,10 @@ parse_history_plan_records() {
 	local -A seen_commits=()
 	local line raw action short_sha tail resolved_sha annotation message reason section_name
 
+	PLAN_HAS_DROP=false
+	PLAN_HAS_SQUASH=false
+	PLAN_HAS_BUNDLE=false
+
 	while IFS= read -r line || [[ -n "$line" ]]; do
 		line_no=$((line_no + 1))
 		raw="$line"
@@ -465,6 +475,12 @@ parse_history_plan_records() {
 		case "$action" in
 		pick | drop | squash | bundle) ;;
 		*) history_plan_parse_error "$line_no" "$raw" "invalid action '${action}' (expected pick/drop/squash/bundle)" ;;
+		esac
+
+		case "$action" in
+		drop) PLAN_HAS_DROP=true ;;
+		squash) PLAN_HAS_SQUASH=true ;;
+		bundle) PLAN_HAS_BUNDLE=true ;;
 		esac
 
 		if ! resolved_sha="$(git rev-parse --verify --quiet "${short_sha}^{commit}")"; then
@@ -567,6 +583,15 @@ render_html_header() {
   pre { margin: 0; padding: 1rem; }
   .table2 { width: 100%; table-layout: fixed; border-collapse: separate; border-spacing: 16px 0; }
   .table2 td { width: 50%; vertical-align: top; }
+  .banner {
+    border-radius: 8px;
+    border: 2px solid #b42318;
+    background: #fef3f2;
+    color: #7a271a;
+    padding: 1rem;
+    margin: 0 0 1rem 0;
+    font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+  }
   pre.code {
     white-space: pre;
     word-break: normal;
@@ -587,6 +612,17 @@ HTML
 	cat >>"$html_path" <<HTML
 <p class="meta"><strong>Repository:</strong> $(html_escape_arg "$repo_name")<br>
 <strong>Range:</strong> $(html_escape_arg "$A_COMMIT")..$(html_escape_arg "$B_COMMIT") (first-parent, oldest → newest)</p>
+HTML
+
+	if [[ "$PLAN_HAS_DROP" == true ]]; then
+		cat >>"$html_path" <<'HTML'
+<div class="banner">
+  <strong>Important review warning:</strong> Some commits are configured as <code>drop</code>. Diffs into and out of those commits are intentionally omitted in this report. Reviewers must explicitly trust those hidden transitions.
+</div>
+HTML
+	fi
+
+	cat >>"$html_path" <<HTML
 <hr class="sep">
 HTML
 }
@@ -693,9 +729,8 @@ render_drop_block() {
 	local commit_sha="$2"
 	local reason="$3"
 
-	local commit_abbr author_name author_email author_date commit_msg rendered_reason
+	local commit_abbr author_name author_email author_date commit_msg
 	commit_abbr="$(git rev-parse --short "$commit_sha")"
-	rendered_reason="${reason:-no reason provided}"
 
 	{
 		IFS= read -r -d '' author_name
@@ -712,7 +747,12 @@ render_drop_block() {
 		echo '  <h3>Commit message</h3>'
 		printf '  <div class="commit-msg">%s</div>\n' "$(html_escape_arg "$commit_msg")"
 		echo '  <h3>Diff status</h3>'
-		printf '  <div class="commit-msg"><strong>Warning:</strong> %s</div>\n' "$(html_escape_arg "not showing diffs in and out of commit ${commit_abbr} because ${rendered_reason}")"
+		if [[ -n "$reason" ]]; then
+			printf '  <div class="commit-msg"><strong>Drop reason:</strong> %s</div>\n' "$(html_escape_arg "$reason")"
+		else
+			echo '  <div class="commit-msg"><strong>Drop reason:</strong> no reason provided</div>'
+		fi
+		echo '  <div class="commit-msg"><strong>Omission notice:</strong> Diffs into and out of this commit are intentionally omitted. Reviewers must trust this hidden transition.</div>'
 		echo '</div>'
 	} >>"$html_path"
 }
@@ -757,6 +797,7 @@ render_squash_block() {
 		echo '<div class="commit-block">'
 		echo "  <h2>Squashed commits: $(html_escape_arg "$first_abbr")..$(html_escape_arg "$last_abbr")</h2>"
 		echo '  <p class="meta"><strong>Combined diff:</strong> parent(first commit) → last commit in squash run</p>'
+		echo '  <div class="commit-msg"><strong>Why grouped:</strong> These commits are grouped for readability. <strong>Scope change:</strong> this report shows one combined diff from the parent of the first squashed commit to the last squashed commit, so intermediate commit-to-commit transitions are not shown separately.</div>'
 		echo '  <h3>Included commits</h3>'
 	} >>"$html_path"
 
@@ -802,8 +843,17 @@ render_bundle_boundary() {
 	{
 		echo '<div class="commit-block">'
 		echo "  <h2>$(html_escape_arg "$label")</h2>"
+		if [[ "$boundary_type" == "begin" ]]; then
+			echo '  <div class="commit-msg"><strong>Why grouped:</strong> These commits are bundled for readability. <strong>Scope change:</strong> there is no diff-scope reduction here—each bundled commit still shows its own diff against its parent.</div>'
+		fi
 		echo '</div>'
 	} >>"$html_path"
+}
+
+emit_drop_cli_warning() {
+	if [[ "$PLAN_HAS_DROP" == true ]]; then
+		echo "Some commits are configured as drop; diffs into/out of those commits are intentionally omitted. Reviewers must trust these hidden transitions." >&2
+	fi
 }
 
 generate_diff_html() {
@@ -901,6 +951,7 @@ main() {
 	if [[ -n "$HISTORY_PLAN_CONTENT" ]]; then
 		parse_history_plan_records
 	fi
+	emit_drop_cli_warning
 
 	validate_demo_files
 
