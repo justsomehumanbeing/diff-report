@@ -283,20 +283,6 @@ parse_args() {
 
 }
 
-synthesize_default_history_plan() {
-	if [[ -n "$HISTORY_PLAN_SOURCE" ]]; then
-		return 0
-	fi
-
-	local commits sha subject
-	mapfile -t commits < <(git rev-list --first-parent --reverse "${A_COMMIT}..${B_COMMIT}")
-	HISTORY_PLAN_CONTENT=""
-	for sha in "${commits[@]}"; do
-		subject="$(git show -s --format='%s' "$sha")"
-		HISTORY_PLAN_CONTENT+="pick ${sha} ${subject}"$'\n'
-	done
-}
-
 check_dependencies() {
 	if ! command -v git >/dev/null 2>&1; then
 		echo "Error: required dependency 'git' not found in PATH." >&2
@@ -338,7 +324,7 @@ validate_commits() {
 
 	local a_resolved
 	a_resolved="$(git rev-parse "$A_COMMIT^{commit}")"
-	if ! git rev-list --first-parent "$B_COMMIT" | grep -Fxq "$a_resolved"; then
+	if ! grep -Fxq "$a_resolved" < <(git rev-list --first-parent "$B_COMMIT"); then
 		echo "Error: first-parent path of B ('$B_COMMIT') does not include A ('$A_COMMIT')." >&2
 		echo "Hint: choose an A commit from B's first-parent history (or swap commits if reversed)." >&2
 		exit 2
@@ -376,27 +362,58 @@ interactive_edit_history_plan() {
 	[[ "$INTERACTIVE_MODE" -eq 1 ]] || return 0
 
 	local editor
-	editor="${GIT_SEQUENCE_EDITOR:-${VISUAL:-${EDITOR:-}}}"
-	if [[ -z "$editor" ]]; then
-		echo "Warning: --interactive requested, but no \$EDITOR found. Proceeding non-interactively." >&2
-		return 0
-	fi
+	editor="${EDITOR:-vi}"
 
 	local tmp
 	tmp="$(mktemp)"
 	trap 'rm -f "'$tmp'"' RETURN
 
 	{
-		echo "# Edit this plan."
-		echo "# Actions: pick|drop|squash|bundle <sha> [%annotation] [# message]"
-		echo "# Bundle runs require %SECTION on the first contiguous bundle line."
+		echo "# Reorder and edit commits to shape this report."
+		echo "#"
+		echo "# Allowed actions: pick, drop, squash, bundle"
+		echo "#   pick <hash>                     include commit with full diff"
+		echo "#   drop <hash> %reason            omit commit diff, show drop marker and reason"
+		echo "#   squash <hash>                  combine contiguous squash commits into one diff"
+		echo "#   bundle <hash> %SECTION NAME    wrap contiguous bundle commits in section markers"
+		echo "#"
+		echo "# Syntax notes:"
+		echo "#   - %reason is valid for drop"
+		echo "#   - %SECTION is required on the first commit of each bundle run"
+		echo "#   - optional '# message' text is ignored by the parser"
+		echo "#"
+		echo "# Warning: 'drop' skips rendering that commit's diff and can hide changes."
 		echo "# Range: ${A_COMMIT}..${B_COMMIT} (first-parent)."
 		echo ""
 		printf '%s' "$HISTORY_PLAN_CONTENT"
 	} >"$tmp"
 
-	"$editor" "$tmp"
-	HISTORY_PLAN_CONTENT="$(cat "$tmp")"
+	while true; do
+		"$editor" "$tmp"
+		HISTORY_PLAN_CONTENT="$(cat "$tmp")"
+
+		if (parse_history_plan_records) >/dev/null 2>"$tmp.err"; then
+			break
+		fi
+
+		echo "Error: invalid interactive history plan." >&2
+		cat "$tmp.err" >&2
+
+		if [[ -t 0 && -t 1 ]]; then
+			printf "Re-open editor to fix the plan? [Y/n]: " >&2
+			local retry
+			IFS= read -r retry || retry=""
+			if [[ "$retry" =~ ^[Nn]$ ]]; then
+				echo "Aborted due to invalid interactive history plan. Fix the file and rerun with --history-plan-file." >&2
+				exit 2
+			fi
+		else
+			echo "Cannot prompt for retry in non-interactive shell. Re-run with --history-plan-file after fixing the plan." >&2
+			exit 2
+		fi
+	done
+
+	rm -f "$tmp.err"
 }
 
 history_plan_parse_error() {
