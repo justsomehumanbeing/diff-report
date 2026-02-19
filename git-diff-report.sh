@@ -987,11 +987,54 @@ generate_output() {
 
 	if [[ "$HAS_WKHTMLTOPDF" == true && ${CONFIG[html_only]} -ne 1 ]]; then
 		# skip output to pdf if --html-only or if wkhtmltopdf is not available
+		prevent_overwrites "${CONFIG[output_abs]}"
 		wkhtmltopdf "$html" "${CONFIG[output_abs]}"
 		echo "✅ Wrote report to: ${CONFIG[output_abs]}"
+
 	else
 		local html_out
-		html_out="${CONFIG[output_abs]%.pdf}.html"
+		if [[ "${CONFIG[html_output_requested]}" -eq 1 ]]; then
+			# honor explicit --html-output
+			case "${CONFIG[html_output]}" in
+				/*)
+					html_out="${CONFIG[html_output]}"
+					;;
+				*)
+					# interpret relative path relative to the chosen PDF output location
+					html_out="$(dirname -- "${CONFIG[output_abs]}")/${CONFIG[html_output]}"
+					;;
+			esac
+		else
+			# guess from the PDF output path
+			html_out="${CONFIG[output_abs]%.pdf}.html"
+		fi
+
+		prevent_overwrites "$html_out"
+		cp "$html" "$html_out"
+		if [[ ${CONFIG[html_only]} -ne 1 ]]; then
+			# only report fallback if HTML was not requested by --html-only
+			echo "⚠️ wkhtmltopdf not found. Wrote HTML report instead: ${html_out}"
+			echo "   Convert later with: wkhtmltopdf ${html_out} ${CONFIG[output]}"
+		fi
+	fi
+	if [[ "$HAS_WKHTMLTOPDF" == true && (${CONFIG[html_only]} -eq 1 || ${CONFIG[html_output_requested]}) ]]; then
+		local html_out
+		if [[ "${CONFIG[html_output_requested]}" -eq 1 ]]; then
+			# honor explicit --html-output
+			case "${CONFIG[html_output]}" in
+				/*)
+					html_out="${CONFIG[html_output]}"
+					;;
+				*)
+					# interpret relative path relative to the chosen PDF output location
+					html_out="$(dirname -- "${CONFIG[output_abs]}")/${CONFIG[html_output]}"
+					;;
+			esac
+		else
+			# guess from the PDF output path
+			html_out="${CONFIG[output_abs]%.pdf}.html"
+		fi
+
 		prevent_overwrites "$html_out"
 		cp "$html" "$html_out"
 		if [[ ${CONFIG[html_only]} -ne 1 ]]; then
