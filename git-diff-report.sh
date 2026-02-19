@@ -447,7 +447,7 @@ parse_history_plan_records() {
 		if [[ -n "$tail" ]]; then
 			if [[ "$tail" =~ ^%([^#]*[^[:space:]#]|[^#[:space:]])[[:space:]]*(#(.*))?$ ]]; then
 				annotation="${BASH_REMATCH[1]}"
-				message="${BASH_REMATCH[4]}"
+				message="${BASH_REMATCH[3]}"
 			elif [[ "$tail" =~ ^#[[:space:]]*(.*)$ ]]; then
 				message="${BASH_REMATCH[1]}"
 			else
