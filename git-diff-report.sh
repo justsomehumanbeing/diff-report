@@ -35,6 +35,9 @@ usage() {
 	echo "                      Alias of --history-plan-file"
 	echo "      --detailed-commit-history-stdin"
 	echo "                      Alias of --history-plan-stdin"
+	echo "      --html-output   Activates HTML output and specifies file to be written to."
+	echo "      --html-only   	Activates HTML output and deactivates PDF output."
+	echo "                      Default Output: ${DEFAULT_OUTPUT_FILENAME%.pdf}.html"
 	echo ""
 	echo "Range semantics:"
 	echo "  - A must be an ancestor of B."
@@ -79,6 +82,8 @@ INTERACTIVE_MODE=0
 HISTORY_PLAN_SOURCE=""
 HISTORY_PLAN_FILE=""
 HISTORY_PLAN_CONTENT=""
+HTML_ONLY=0
+HTML_OUTPUT="${DEFAULT_OUTPUT_FILENAME%.pdf}.html"
 
 # History plan controls
 INTERACTIVE_MODE=0
@@ -964,7 +969,8 @@ generate_output() {
 	render_demo_section "$html"
 	generate_diff_html "$html" "$workdir"
 
-	if [[ "$HAS_WKHTMLTOPDF" == true ]]; then
+	if [[ "$HAS_WKHTMLTOPDF" == true && $HTML_ONLY -ne 1 ]]; then
+		# skip output to pdf if --html-only or if wkhtmltopdf is not available
 		wkhtmltopdf "$html" "$OUTPUT_ABS"
 		echo "✅ Wrote report to: ${OUTPUT_ABS}"
 	else
@@ -972,8 +978,11 @@ generate_output() {
 		html_out="${OUTPUT_ABS%.pdf}.html"
 		prevent_overwrites "$html_out" 1
 		cp "$html" "$html_out"
-		echo "⚠️ wkhtmltopdf not found. Wrote HTML report instead: ${html_out}"
-		echo "   Convert later with: wkhtmltopdf ${html_out} ${OUTPUT}"
+		if [[ $HTML_ONLY -ne 1 ]]; then
+			# only report fallback if HTML was not requested by --html-only
+			echo "⚠️ wkhtmltopdf not found. Wrote HTML report instead: ${html_out}"
+			echo "   Convert later with: wkhtmltopdf ${html_out} ${OUTPUT}"
+		fi
 	fi
 }
 
