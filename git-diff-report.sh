@@ -70,30 +70,32 @@ html_escape_stream() {
 }
 
 # Defaults
-OUTPUT="$DEFAULT_OUTPUT_FILENAME"
-OUTPUT_ABS=""
-FORCE_OVERWRITE=0
-INCLUDE_DEMO=false
-DEMO_OLD="testfileold"
-DEMO_NEW="testfilenew"
-A_COMMIT=""
-B_COMMIT=""
-INTERACTIVE_MODE=0
-HISTORY_PLAN_SOURCE=""
-HISTORY_PLAN_FILE=""
-HISTORY_PLAN_CONTENT=""
-HTML_ONLY=0
-HTML_OUTPUT="${DEFAULT_OUTPUT_FILENAME%.pdf}.html"
+
+declare -A CONFIG=()
+CONFIG[output]="$DEFAULT_OUTPUT_FILENAME"
+CONFIG[output_abs]=""
+CONFIG[force_overwrite]=0
+CONFIG[include_demo]=false
+CONFIG[demo_old]="testfileold"
+CONFIG[demo_new]="testfilenew"
+CONFIG[a_commit]=""
+CONFIG[b_commit]=""
+CONFIG[interactive_mode]=0
+CONFIG[history_plan_source]=""
+CONFIG[history_plan_file]=""
+CONFIG[history_plan_content]=""
+CONFIG[html_only]=0
+CONFIG[html_output]="${DEFAULT_OUTPUT_FILENAME%.pdf}.html"
 
 # History plan controls
-INTERACTIVE_MODE=0
-HISTORY_PLAN_SOURCE="" # "", interactive, file, stdin
-HISTORY_PLAN_FILE=""
-HISTORY_PLAN_CONTENT=""
-HISTORY_PLAN_PARSED_TSV=""
-PLAN_HAS_DROP=false
-PLAN_HAS_SQUASH=false
-PLAN_HAS_BUNDLE=false
+CONFIG[interactive_mode]=0
+CONFIG[history_plan_source]="" # "", interactive, file, stdin
+CONFIG[history_plan_file]=""
+CONFIG[history_plan_content]=""
+CONFIG[history_plan_parsed_tsv]=""
+CONFIG[plan_has_drop]=false
+CONFIG[plan_has_squash]=false
+CONFIG[plan_has_bundle]=false
 
 # Dependency flags (set by check_dependencies)
 HAS_DELTA=false
@@ -123,7 +125,7 @@ prevent_overwrites() {
 		exit 1
 	fi
 
-	if [[ -e "$1" && "$FORCE_OVERWRITE" -ne 1 ]]; then
+	if [[ -e "$1" && "${CONFIG[force_overwrite]}" -ne 1 ]]; then
 		echo "Warning: output file already exists: $1" >&2
 		echo "Refusing to overwrite without --force." >&2
 		exit 2
@@ -133,22 +135,22 @@ prevent_overwrites() {
 }
 
 parse_args() {
-	OUTPUT="$DEFAULT_OUTPUT_FILENAME"
-	OUTPUT_ABS=""
-	INCLUDE_DEMO=false
-	DEMO_OLD="testfileold"
-	DEMO_NEW="testfilenew"
-	A_COMMIT=""
-	B_COMMIT=""
-	INTERACTIVE_MODE=0
-	HISTORY_PLAN_SOURCE=""
-	HISTORY_PLAN_FILE=""
-	HISTORY_PLAN_CONTENT=""
-	FORCE_OVERWRITE=0
-	HISTORY_PLAN_PARSED_TSV=""
-	PLAN_HAS_DROP=false
-	PLAN_HAS_SQUASH=false
-	PLAN_HAS_BUNDLE=false
+	CONFIG[output]="$DEFAULT_OUTPUT_FILENAME"
+	CONFIG[output_abs]=""
+	CONFIG[include_demo]=false
+	CONFIG[demo_old]="testfileold"
+	CONFIG[demo_new]="testfilenew"
+	CONFIG[a_commit]=""
+	CONFIG[b_commit]=""
+	CONFIG[interactive_mode]=0
+	CONFIG[history_plan_source]=""
+	CONFIG[history_plan_file]=""
+	CONFIG[history_plan_content]=""
+	CONFIG[force_overwrite]=0
+	CONFIG[history_plan_parsed_tsv]=""
+	CONFIG[plan_has_drop]=false
+	CONFIG[plan_has_squash]=false
+	CONFIG[plan_has_bundle]=false
 
 	while [[ $# -gt 0 ]]; do
 		case "$1" in
@@ -156,7 +158,7 @@ parse_args() {
 		-o | --output)
 			shift
 			[[ $# -gt 0 ]] || usage
-			OUTPUT="$1"
+			CONFIG[output]="$1"
 			shift
 			;;
 			# HELP
@@ -165,73 +167,73 @@ parse_args() {
 			;;
 			# FORCE
 		-f | --force)
-			FORCE_OVERWRITE=1
+			CONFIG[force_overwrite]=1
 			shift
 			;;
 			# DEMO
 		--include-demo)
-			INCLUDE_DEMO=true
+			CONFIG[include_demo]=true
 			shift
 			;;
 		--demo-old)
 			shift
 			[[ $# -gt 0 ]] || usage
-			DEMO_OLD="$1"
+			CONFIG[demo_old]="$1"
 			shift
 			;;
 		--demo-new)
 			shift
 			[[ $# -gt 0 ]] || usage
-			DEMO_NEW="$1"
+			CONFIG[demo_new]="$1"
 			shift
 			;;
 			# INTERACTIVE
 		--interactive)
-			if [[ -n "$HISTORY_PLAN_SOURCE" && "$HISTORY_PLAN_SOURCE" != "interactive" ]]; then
+			if [[ -n "${CONFIG[history_plan_source]}" && "${CONFIG[history_plan_source]}" != "interactive" ]]; then
 				echo "Error: --interactive cannot be combined with --history-plan-*" >&2
 				usage
 			fi
-			HISTORY_PLAN_SOURCE="interactive"
-			INTERACTIVE_MODE=1
+			CONFIG[history_plan_source]="interactive"
+			CONFIG[interactive_mode]=1
 			shift
 
 			# Optional inline A and B after --interactive
 			if [[ $# -gt 0 && "$1" != -* ]]; then
-				if [[ -n "${A_COMMIT:-}" ]]; then
+				if [[ -n "${CONFIG[a_commit]:-}" ]]; then
 					echo "Error: duplicate A commit provided (positional and --interactive)." >&2
 					usage
 				fi
-				A_COMMIT="$1"
+				CONFIG[a_commit]="$1"
 				shift
 				if [[ $# -gt 0 && "$1" != -* ]]; then
-					if [[ -n "${B_COMMIT:-}" ]]; then
+					if [[ -n "${CONFIG[b_commit]:-}" ]]; then
 						echo "Error: duplicate B commit provided (positional and --interactive)." >&2
 						usage
 					fi
-					B_COMMIT="$1"
+					CONFIG[b_commit]="$1"
 					shift
 				fi
 			fi
 			;;
 			# DETAILED HISTORY
 		--history-plan-file | --detailed-commit-history-file)
-			if [[ -n "$HISTORY_PLAN_SOURCE" && "$HISTORY_PLAN_SOURCE" != "file" ]]; then
+			if [[ -n "${CONFIG[history_plan_source]}" && "${CONFIG[history_plan_source]}" != "file" ]]; then
 				echo "Error: choose at most one history plan source (interactive, file, or stdin)." >&2
 				usage
 			fi
-			HISTORY_PLAN_SOURCE="file"
+			CONFIG[history_plan_source]="file"
 			shift
 			[[ $# -gt 0 ]] || usage
-			HISTORY_PLAN_FILE="$1"
+			CONFIG[history_plan_file]="$1"
 			shift
 			;;
 
 		--history-plan-stdin | --detailed-commit-history-stdin)
-			if [[ -n "$HISTORY_PLAN_SOURCE" && "$HISTORY_PLAN_SOURCE" != "stdin" ]]; then
+			if [[ -n "${CONFIG[history_plan_source]}" && "${CONFIG[history_plan_source]}" != "stdin" ]]; then
 				echo "Error: choose at most one history plan source (interactive, file, or stdin)." >&2
 				usage
 			fi
-			HISTORY_PLAN_SOURCE="stdin"
+			CONFIG[history_plan_source]="stdin"
 			shift
 			;;
 		-*)
@@ -240,10 +242,10 @@ parse_args() {
 			usage
 			;;
 		*)
-			if [[ -z "${A_COMMIT:-}" ]]; then
-				A_COMMIT="$1"
-			elif [[ -z "${B_COMMIT:-}" ]]; then
-				B_COMMIT="$1"
+			if [[ -z "${CONFIG[a_commit]:-}" ]]; then
+				CONFIG[a_commit]="$1"
+			elif [[ -z "${CONFIG[b_commit]:-}" ]]; then
+				CONFIG[b_commit]="$1"
 			else
 				echo "Too many positional arguments." >&2
 				usage
@@ -253,59 +255,59 @@ parse_args() {
 		esac
 	done
 
-	if [[ "$INTERACTIVE_MODE" -eq 1 ]]; then
-		if [[ -z "${B_COMMIT:-}" ]]; then
-			B_COMMIT="HEAD"
+	if [[ "${CONFIG[interactive_mode]}" -eq 1 ]]; then
+		if [[ -z "${CONFIG[b_commit]:-}" ]]; then
+			CONFIG[b_commit]="HEAD"
 		fi
-		if [[ -z "${A_COMMIT:-}" ]]; then
-			A_COMMIT="$(git rev-list --first-parent "$B_COMMIT" | tail -n 1)"
-		fi
-	fi
-
-	if [[ "$HISTORY_PLAN_SOURCE" == "file" || "$HISTORY_PLAN_SOURCE" == "stdin" ]]; then
-		if [[ -z "${B_COMMIT:-}" ]]; then
-			B_COMMIT="HEAD"
-		fi
-		if [[ -z "${A_COMMIT:-}" ]]; then
-			A_COMMIT="$(git rev-list --first-parent "$B_COMMIT" | tail -n 1)"
+		if [[ -z "${CONFIG[a_commit]:-}" ]]; then
+			CONFIG[a_commit]="$(git rev-list --first-parent "${CONFIG[b_commit]}" | tail -n 1)"
 		fi
 	fi
 
-	: "${A_COMMIT:?Missing A}"
-	: "${B_COMMIT:?Missing B}"
+	if [[ "${CONFIG[history_plan_source]}" == "file" || "${CONFIG[history_plan_source]}" == "stdin" ]]; then
+		if [[ -z "${CONFIG[b_commit]:-}" ]]; then
+			CONFIG[b_commit]="HEAD"
+		fi
+		if [[ -z "${CONFIG[a_commit]:-}" ]]; then
+			CONFIG[a_commit]="$(git rev-list --first-parent "${CONFIG[b_commit]}" | tail -n 1)"
+		fi
+	fi
 
-	case "$HISTORY_PLAN_SOURCE" in
+	: "${CONFIG[a_commit]:?Missing A}"
+	: "${CONFIG[b_commit]:?Missing B}"
+
+	case "${CONFIG[history_plan_source]}" in
 	file)
-		if [[ ! -f "$HISTORY_PLAN_FILE" ]]; then
-			echo "Error: history plan file not found: $HISTORY_PLAN_FILE" >&2
+		if [[ ! -f "${CONFIG[history_plan_file]}" ]]; then
+			echo "Error: history plan file not found: ${CONFIG[history_plan_file]}" >&2
 			exit 2
 		fi
-		HISTORY_PLAN_CONTENT="$(cat "$HISTORY_PLAN_FILE")"
+		CONFIG[history_plan_content]="$(cat "${CONFIG[history_plan_file]}")"
 		;;
 	stdin)
-		HISTORY_PLAN_CONTENT="$(cat)"
+		CONFIG[history_plan_content]="$(cat)"
 		;;
 	interactive | "") ;;
 	*)
-		echo "fatal error, unknown history plan source: $HISTORY_PLAN_SOURCE" >&2
+		echo "fatal error, unknown history plan source: ${CONFIG[history_plan_source]}" >&2
 		exit 1
 		;;
 	esac
 
 	# demo args validation
-	if [[ "$INCLUDE_DEMO" != true && ("$DEMO_OLD" != "testfileold" || "$DEMO_NEW" != "testfilenew") ]]; then
+	if [[ "${CONFIG[include_demo]}" != true && ("${CONFIG[demo_old]}" != "testfileold" || "${CONFIG[demo_new]}" != "testfilenew") ]]; then
 		echo "Error: --demo-old/--demo-new require --include-demo." >&2
 		usage
 	fi
 
 	# Normalize output path once so all write-sites use the same target.
 	if command -v realpath >/dev/null 2>&1; then
-		OUTPUT_ABS="$(realpath -m "$OUTPUT")"
+		CONFIG[output_abs]="$(realpath -m "${CONFIG[output]}")"
 	else
-		OUTPUT_ABS="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$OUTPUT")"
+		CONFIG[output_abs]="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "${CONFIG[output]}")"
 	fi
 
-	prevent_overwrites "$OUTPUT_ABS" 0
+	prevent_overwrites "${CONFIG[output_abs]}" 0
 
 }
 
@@ -333,51 +335,51 @@ check_dependencies() {
 }
 
 validate_commits() {
-	if ! git rev-parse --verify --quiet "$A_COMMIT^{commit}" >/dev/null; then
-		echo "Error: '$A_COMMIT' is not a valid commit-ish." >&2
+	if ! git rev-parse --verify --quiet "${CONFIG[a_commit]}^{commit}" >/dev/null; then
+		echo "Error: '${CONFIG[a_commit]}' is not a valid commit-ish." >&2
 		exit 2
 	fi
-	if ! git rev-parse --verify --quiet "$B_COMMIT^{commit}" >/dev/null; then
-		echo "Error: '$B_COMMIT' is not a valid commit-ish." >&2
+	if ! git rev-parse --verify --quiet "${CONFIG[b_commit]}^{commit}" >/dev/null; then
+		echo "Error: '${CONFIG[b_commit]}' is not a valid commit-ish." >&2
 		exit 2
 	fi
 
-	if ! git merge-base --is-ancestor "$A_COMMIT" "$B_COMMIT"; then
-		echo "Error: expected A to be an ancestor of B, but got A='$A_COMMIT' and B='$B_COMMIT'." >&2
-		echo "Hint: swap commits if they were provided in reverse order: $0 [-o output.pdf] $B_COMMIT $A_COMMIT" >&2
+	if ! git merge-base --is-ancestor "${CONFIG[a_commit]}" "${CONFIG[b_commit]}"; then
+		echo "Error: expected A to be an ancestor of B, but got A='${CONFIG[a_commit]}' and B='${CONFIG[b_commit]}'." >&2
+		echo "Hint: swap commits if they were provided in reverse order: $0 [-o output.pdf] ${CONFIG[b_commit]} ${CONFIG[a_commit]}" >&2
 		exit 2
 	fi
 
 	local a_resolved
-	a_resolved="$(git rev-parse "$A_COMMIT^{commit}")"
-	if ! grep -Fxq "$a_resolved" < <(git rev-list --first-parent "$B_COMMIT"); then
-		echo "Error: first-parent path of B ('$B_COMMIT') does not include A ('$A_COMMIT')." >&2
+	a_resolved="$(git rev-parse "${CONFIG[a_commit]}^{commit}")"
+	if ! grep -Fxq "$a_resolved" < <(git rev-list --first-parent "${CONFIG[b_commit]}"); then
+		echo "Error: first-parent path of B ('${CONFIG[b_commit]}') does not include A ('${CONFIG[a_commit]}')." >&2
 		echo "Hint: choose an A commit from B's first-parent history (or swap commits if reversed)." >&2
 		exit 2
 	fi
 }
 
 validate_demo_files() {
-	if [[ "$INCLUDE_DEMO" == true ]]; then
-		if [[ ! -f "$DEMO_OLD" ]]; then
-			echo "Error: demo old file not found: $DEMO_OLD" >&2
+	if [[ "${CONFIG[include_demo]}" == true ]]; then
+		if [[ ! -f "${CONFIG[demo_old]}" ]]; then
+			echo "Error: demo old file not found: ${CONFIG[demo_old]}" >&2
 			exit 2
 		fi
-		if [[ ! -f "$DEMO_NEW" ]]; then
-			echo "Error: demo new file not found: $DEMO_NEW" >&2
+		if [[ ! -f "${CONFIG[demo_new]}" ]]; then
+			echo "Error: demo new file not found: ${CONFIG[demo_new]}" >&2
 			exit 2
 		fi
 	fi
 }
 
 synthesize_default_history_plan() {
-	if [[ -n "$HISTORY_PLAN_SOURCE" ]]; then
+	if [[ -n "${CONFIG[history_plan_source]}" ]]; then
 		return 0
 	fi
 
 	local commits sha subject
-	mapfile -t commits < <(git rev-list --first-parent --reverse "${A_COMMIT}..${B_COMMIT}")
-	HISTORY_PLAN_CONTENT=""
+	mapfile -t commits < <(git rev-list --first-parent --reverse "${CONFIG[a_commit]}..${CONFIG[b_commit]}")
+	CONFIG[history_plan_content]=""
 	for sha in "${commits[@]}"; do
 		subject="$(git show -s --format='%s' "$sha")"
 		HISTORY_PLAN_CONTENT+="pick ${sha} # ${subject}"$'\n'
@@ -385,7 +387,7 @@ synthesize_default_history_plan() {
 }
 
 interactive_edit_history_plan() {
-	[[ "$INTERACTIVE_MODE" -eq 1 ]] || return 0
+	[[ "${CONFIG[interactive_mode]}" -eq 1 ]] || return 0
 
 	local editor
 	editor="${EDITOR:-vi}"
@@ -409,14 +411,14 @@ interactive_edit_history_plan() {
 		echo "#   - optional '# message' text is ignored by the parser"
 		echo "#"
 		echo "# Warning: 'drop' skips rendering that commit's diff and can hide changes."
-		echo "# Range: ${A_COMMIT}..${B_COMMIT} (first-parent)."
+		echo "# Range: ${CONFIG[a_commit]}..${CONFIG[b_commit]} (first-parent)."
 		echo ""
-		printf '%s' "$HISTORY_PLAN_CONTENT"
+		printf '%s' "${CONFIG[history_plan_content]}"
 	} >"$tmp"
 
 	while true; do
 		"$editor" "$tmp"
-		HISTORY_PLAN_CONTENT="$(cat "$tmp")"
+		CONFIG[history_plan_content]="$(cat "$tmp")"
 
 		if (parse_history_plan_records) >/dev/null 2>"$tmp.err"; then
 			break
@@ -455,7 +457,7 @@ parse_history_plan_records() {
 	# Produces machine-friendly TSV rows:
 	# action<TAB>resolved_sha<TAB>reason<TAB>section_name<TAB>display_message
 	local -a range_commits
-	mapfile -t range_commits < <(git rev-list --first-parent --reverse "${A_COMMIT}..${B_COMMIT}")
+	mapfile -t range_commits < <(git rev-list --first-parent --reverse "${CONFIG[a_commit]}..${CONFIG[b_commit]}")
 
 	local -A range_index=()
 	local idx sha
@@ -472,9 +474,9 @@ parse_history_plan_records() {
 	local -A seen_commits=()
 	local line raw action short_sha tail resolved_sha annotation message reason section_name
 
-	PLAN_HAS_DROP=false
-	PLAN_HAS_SQUASH=false
-	PLAN_HAS_BUNDLE=false
+	CONFIG[plan_has_drop]=false
+	CONFIG[plan_has_squash]=false
+	CONFIG[plan_has_bundle]=false
 
 	while IFS= read -r line || [[ -n "$line" ]]; do
 		line_no=$((line_no + 1))
@@ -498,22 +500,22 @@ parse_history_plan_records() {
 		esac
 
 		case "$action" in
-		drop) PLAN_HAS_DROP=true ;;
-		squash) PLAN_HAS_SQUASH=true ;;
-		bundle) PLAN_HAS_BUNDLE=true ;;
+		drop) CONFIG[plan_has_drop]=true ;;
+		squash) CONFIG[plan_has_squash]=true ;;
+		bundle) CONFIG[plan_has_bundle]=true ;;
 		esac
 
 		if ! resolved_sha="$(git rev-parse --verify --quiet "${short_sha}^{commit}")"; then
 			history_plan_parse_error "$line_no" "$raw" "invalid commit hash '${short_sha}'"
 		fi
 		if [[ -z "${range_index[$resolved_sha]+x}" ]]; then
-			history_plan_parse_error "$line_no" "$raw" "commit '${short_sha}' not in ${A_COMMIT}..${B_COMMIT} first-parent range"
+			history_plan_parse_error "$line_no" "$raw" "commit '${short_sha}' not in ${CONFIG[a_commit]}..${CONFIG[b_commit]} first-parent range"
 		fi
 		if [[ -n "${seen_commits[$resolved_sha]+x}" ]]; then
 			history_plan_parse_error "$line_no" "$raw" "commit '${short_sha}' appears more than once"
 		fi
 		if ((range_index[$resolved_sha] <= last_index)); then
-			history_plan_parse_error "$line_no" "$raw" "commit order does not match ${A_COMMIT}..${B_COMMIT} first-parent order"
+			history_plan_parse_error "$line_no" "$raw" "commit order does not match ${CONFIG[a_commit]}..${CONFIG[b_commit]} first-parent order"
 		fi
 		seen_commits["$resolved_sha"]=1
 		last_index="${range_index[$resolved_sha]}"
@@ -563,9 +565,9 @@ parse_history_plan_records() {
 		esac
 
 		rows+="${action}"$'\t'"${resolved_sha}"$'\t'"${reason}"$'\t'"${section_name}"$'\t'"${message}"$'\n'
-	done <<<"$HISTORY_PLAN_CONTENT"
+	done <<<"${CONFIG[history_plan_content]}"
 
-	HISTORY_PLAN_PARSED_TSV="$rows"
+	CONFIG[history_plan_parsed_tsv]="$rows"
 }
 
 history_plan_to_commit_list() {
@@ -576,7 +578,7 @@ history_plan_to_commit_list() {
 		if [[ "$action" != "drop" ]]; then
 			echo "$sha"
 		fi
-	done <<<"$HISTORY_PLAN_PARSED_TSV"
+	done <<<"${CONFIG[history_plan_parsed_tsv]}"
 }
 
 render_html_header() {
@@ -631,10 +633,10 @@ HTML
 
 	cat >>"$html_path" <<HTML
 <p class="meta"><strong>Repository:</strong> $(html_escape_arg "$repo_name")<br>
-<strong>Range:</strong> $(html_escape_arg "$A_COMMIT")..$(html_escape_arg "$B_COMMIT") (first-parent, oldest → newest)</p>
+<strong>Range:</strong> $(html_escape_arg "${CONFIG[a_commit]}")..$(html_escape_arg "${CONFIG[b_commit]}") (first-parent, oldest → newest)</p>
 HTML
 
-	if [[ "$PLAN_HAS_DROP" == true ]]; then
+	if [[ "${CONFIG[plan_has_drop]}" == true ]]; then
 		cat >>"$html_path" <<'HTML'
 <div class="banner">
   <strong>Important review warning:</strong> Some commits are configured as <code>drop</code>. Diffs into and out of those commits are intentionally omitted in this report. Reviewers must explicitly trust those hidden transitions.
@@ -649,11 +651,11 @@ HTML
 
 render_demo_section() {
 	local html_path="$1"
-	[[ "$INCLUDE_DEMO" == true ]] || return 0
+	[[ "${CONFIG[include_demo]}" == true ]] || return 0
 
 	local esc_old esc_new
-	esc_old="$(html_escape_arg "$DEMO_OLD")"
-	esc_new="$(html_escape_arg "$DEMO_NEW")"
+	esc_old="$(html_escape_arg "${CONFIG[demo_old]}")"
+	esc_new="$(html_escape_arg "${CONFIG[demo_new]}")"
 
 	{
 		echo '<h2>How to read diffs?</h2>'
@@ -664,11 +666,11 @@ render_demo_section() {
 		echo '<table class="table2"><tr>'
 
 		echo "<td><h4>${esc_old}</h4>"
-		printf '<pre class="code">%s</pre>\n' "$(html_escape_arg "$(cat "$DEMO_OLD")")"
+		printf '<pre class="code">%s</pre>\n' "$(html_escape_arg "$(cat "${CONFIG[demo_old]}")")"
 		echo '</td>'
 
 		echo "<td><h4>${esc_new}</h4>"
-		printf '<pre class="code">%s</pre>\n' "$(html_escape_arg "$(cat "$DEMO_NEW")")"
+		printf '<pre class="code">%s</pre>\n' "$(html_escape_arg "$(cat "${CONFIG[demo_new]}")")"
 		echo '</td>'
 
 		echo '</tr></table>'
@@ -676,11 +678,11 @@ render_demo_section() {
 		echo '<h3>Example diff</h3>'
 		echo '<div class="diff">'
 		if [[ "$HAS_DELTA" == true && "$HAS_AHA" == true ]]; then
-			git diff --no-index --no-ext-diff "$DEMO_OLD" "$DEMO_NEW" |
+			git diff --no-index --no-ext-diff "${CONFIG[demo_old]}" "${CONFIG[demo_new]}" |
 				delta "${DELTA_DEMO_OPTIONS[@]}" --syntax-theme="$DELTA_THEME" |
 				aha --line-fix || true
 		else
-			git diff --no-color --no-index --no-ext-diff "$DEMO_OLD" "$DEMO_NEW" |
+			git diff --no-color --no-index --no-ext-diff "${CONFIG[demo_old]}" "${CONFIG[demo_new]}" |
 				html_escape_stream |
 				awk 'BEGIN{print "<pre class=\"diff\"><code>"} {print} END{print "</code></pre>"}' || true
 		fi
@@ -871,7 +873,7 @@ render_bundle_boundary() {
 }
 
 emit_drop_cli_warning() {
-	if [[ "$PLAN_HAS_DROP" == true ]]; then
+	if [[ "${CONFIG[plan_has_drop]}" == true ]]; then
 		echo "Some commits are configured as drop; diffs into/out of those commits are intentionally omitted. Reviewers must trust these hidden transitions." >&2
 	fi
 }
@@ -881,7 +883,7 @@ generate_diff_html() {
 	local workdir="$2"
 
 	local -a commits
-	mapfile -t commits < <(git rev-list --first-parent --reverse "${A_COMMIT}..${B_COMMIT}")
+	mapfile -t commits < <(git rev-list --first-parent --reverse "${CONFIG[a_commit]}..${CONFIG[b_commit]}")
 
 	if [[ ${#commits[@]} -eq 0 ]]; then
 		echo "No commits found (after applying history plan, if any)." >&2
@@ -892,7 +894,7 @@ HTML
 		return 0
 	fi
 
-	if [[ -z "$HISTORY_PLAN_PARSED_TSV" ]]; then
+	if [[ -z "${CONFIG[history_plan_parsed_tsv]}" ]]; then
 		local c
 		for c in "${commits[@]}"; do
 			render_commit_block "$html_path" "$c" "$workdir"
@@ -906,7 +908,7 @@ HTML
 			plan_shas+=("$sha")
 			plan_reasons+=("$reason")
 			plan_sections+=("$section")
-		done <<<"$HISTORY_PLAN_PARSED_TSV"
+		done <<<"${CONFIG[history_plan_parsed_tsv]}"
 
 		local i run_end
 		i=0
@@ -969,19 +971,19 @@ generate_output() {
 	render_demo_section "$html"
 	generate_diff_html "$html" "$workdir"
 
-	if [[ "$HAS_WKHTMLTOPDF" == true && $HTML_ONLY -ne 1 ]]; then
+	if [[ "$HAS_WKHTMLTOPDF" == true && ${CONFIG[html_only]} -ne 1 ]]; then
 		# skip output to pdf if --html-only or if wkhtmltopdf is not available
-		wkhtmltopdf "$html" "$OUTPUT_ABS"
-		echo "✅ Wrote report to: ${OUTPUT_ABS}"
+		wkhtmltopdf "$html" "${CONFIG[output_abs]}"
+		echo "✅ Wrote report to: ${CONFIG[output_abs]}"
 	else
 		local html_out
-		html_out="${OUTPUT_ABS%.pdf}.html"
+		html_out="${CONFIG[output_abs]%.pdf}.html"
 		prevent_overwrites "$html_out" 1
 		cp "$html" "$html_out"
-		if [[ $HTML_ONLY -ne 1 ]]; then
+		if [[ ${CONFIG[html_only]} -ne 1 ]]; then
 			# only report fallback if HTML was not requested by --html-only
 			echo "⚠️ wkhtmltopdf not found. Wrote HTML report instead: ${html_out}"
-			echo "   Convert later with: wkhtmltopdf ${html_out} ${OUTPUT}"
+			echo "   Convert later with: wkhtmltopdf ${html_out} ${CONFIG[output]}"
 		fi
 	fi
 }
@@ -995,7 +997,7 @@ main() {
 
 	synthesize_default_history_plan
 	interactive_edit_history_plan
-	if [[ -n "$HISTORY_PLAN_CONTENT" ]]; then
+	if [[ -n "${CONFIG[history_plan_content]}" ]]; then
 		parse_history_plan_records
 	fi
 	emit_drop_cli_warning
