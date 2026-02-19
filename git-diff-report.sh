@@ -484,7 +484,7 @@ parse_history_plan_records() {
 	local current_bundle_section=""
 	local rows=""
 	local -A seen_commits=()
-	local line raw action short_sha tail resolved_sha annotation message reason section_name
+	local line raw action short_sha tail resolved_sha annotation message reason section_name annotation_part message_part
 
 	PLAN_HAS_DROP=false
 	PLAN_HAS_SQUASH=false
@@ -536,15 +536,30 @@ parse_history_plan_records() {
 		tail="${tail#${tail%%[![:space:]]*}}"
 		annotation=""
 		message=""
-		if [[ -n "$tail" ]]; then
-			if [[ "$tail" =~ ^%([^#]*[^[:space:]#]|[^#[:space:]])[[:space:]]*(#(.*))?$ ]]; then
-				annotation="${BASH_REMATCH[1]}"
-				message="${BASH_REMATCH[3]}"
-			elif [[ "$tail" =~ ^#[[:space:]]*(.*)$ ]]; then
-				message="${BASH_REMATCH[1]}"
+		annotation_part="$tail"
+		message_part=""
+		if [[ "$tail" == *#* ]]; then
+			annotation_part="${tail%%#*}"
+			message_part="${tail#*#}"
+		fi
+
+		annotation_part="${annotation_part%${annotation_part##*[![:space:]]}}"
+		if [[ -n "$annotation_part" ]]; then
+			if [[ "$annotation_part" =~ ^% ]]; then
+				annotation="${annotation_part#%}"
+				annotation="${annotation#${annotation%%[![:space:]]*}}"
+				annotation="${annotation%${annotation##*[![:space:]]}}"
+				if [[ -z "$annotation" ]]; then
+					history_plan_parse_error "$line_no" "$raw" "annotation after '%' must not be empty"
+				fi
 			else
 				history_plan_parse_error "$line_no" "$raw" "could not parse annotation/message segment '${tail}'"
 			fi
+		fi
+
+		if [[ "$tail" == *#* ]]; then
+			message="$message_part"
+			message="${message#${message%%[![:space:]]*}}"
 		fi
 
 		reason=""
@@ -913,9 +928,18 @@ HTML
 		done
 	else
 		local -a plan_actions=() plan_shas=() plan_reasons=() plan_sections=()
-		local action sha reason section _message
-		while IFS=$'\t' read -r action sha reason section _message; do
-			[[ -n "$action" ]] || continue
+		local action sha reason section message line rest
+		while IFS= read -r line; do
+			[[ -n "$line" ]] || continue
+			action="${line%%$'\t'*}"
+			rest="${line#*$'\t'}"
+			sha="${rest%%$'\t'*}"
+			rest="${rest#*$'\t'}"
+			reason="${rest%%$'\t'*}"
+			rest="${rest#*$'\t'}"
+			section="${rest%%$'\t'*}"
+			message="${rest#*$'\t'}"
+
 			plan_actions+=("$action")
 			plan_shas+=("$sha")
 			plan_reasons+=("$reason")
