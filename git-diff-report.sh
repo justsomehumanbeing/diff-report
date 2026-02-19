@@ -38,6 +38,9 @@ usage() {
 	echo "      --html-output   Activates HTML output and specifies file to be written to."
 	echo "      --html-only   	Activates HTML output and deactivates PDF output."
 	echo "                      Default Output: ${DEFAULT_OUTPUT_FILENAME%.pdf}.html"
+	echo "      --allow-for-interactive-clarifications"
+	echo "                      Allow the script to ask follow-up questions on /dev/tty"
+	echo "                      in ambiguous cases (e.g. when an argument looks like an option)."
 	echo ""
 	echo "Range semantics:"
 	echo "  - A must be an ancestor of B."
@@ -127,6 +130,8 @@ parse_args() {
 	CONFIG[b_commit]=""
 	CONFIG[html_only]=0
 	CONFIG[html_output]="${DEFAULT_OUTPUT_FILENAME%.pdf}.html"
+	CONFIG[html_output_requested]=0
+	CONFIG[allow_for_interactive_clarifications]=0
 	# 
 	# history plan controls
 	CONFIG[interactive_mode]=0
@@ -147,6 +152,10 @@ parse_args() {
 			# HELP
 		-h | --help)
 			usage 0
+			;;
+		--allow-for-interactive-clarifications)
+			CONFIG[allow_for_interactive_clarifications]=1
+			shift
 			;;
 			# FORCE
 		-f | --force)
@@ -218,6 +227,39 @@ parse_args() {
 			fi
 			CONFIG[history_plan_source]="stdin"
 			shift
+			;;
+		--html-only)
+			CONFIG[html_only]=1
+			shift
+			;;
+		--html-output)
+			CONFIG[html_output_requested]=1
+			shift
+			[[ $# -gt 0 ]] || usage
+
+			if [[ "$1" == -* ]]; then
+				# Ambiguous: looks like an option.
+				if [[ "${CONFIG[allow_for_interactive_clarifications]}" -ne 1 ]]; then
+					echo "Error: requested HTML output '$1' looks like an option." >&2
+					echo "Hint: pass --allow-for-interactive-clarifications to confirm interactively," >&2
+					echo "      or use a non-ambiguous path like './$1'." >&2
+					usage
+				fi
+
+				read -r -p "Requested HTML output '$1' looks like an option. Use it as filename? [y/N] " ans < /dev/tty || ans=""
+				case "$ans" in
+					y|Y|yes|YES)
+						CONFIG[html_output]="$1"
+						shift
+						;;
+					*)
+						usage
+						;;
+				esac
+			else
+				CONFIG[html_output]="$1"
+				shift
+			fi
 			;;
 		-*)
 			echo "Unknown option: $1" >&2
