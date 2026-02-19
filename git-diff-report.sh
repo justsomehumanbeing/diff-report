@@ -251,6 +251,15 @@ parse_args() {
 		fi
 	fi
 
+	if [[ "$HISTORY_PLAN_SOURCE" == "file" || "$HISTORY_PLAN_SOURCE" == "stdin" ]]; then
+		if [[ -z "${B_COMMIT:-}" ]]; then
+			B_COMMIT="HEAD"
+		fi
+		if [[ -z "${A_COMMIT:-}" ]]; then
+			A_COMMIT="$(git rev-list --first-parent "$B_COMMIT" | tail -n 1)"
+		fi
+	fi
+
 	: "${A_COMMIT:?Missing A}"
 	: "${B_COMMIT:?Missing B}"
 
