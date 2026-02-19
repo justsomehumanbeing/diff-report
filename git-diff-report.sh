@@ -20,6 +20,7 @@ usage() {
 	local exit_code="${1:-1}"
 	echo "Usage: $0 [-o output.pdf] [--force] [--include-demo [--demo-old path --demo-new path]] [--interactive [<A> [<B>]] | <A> <B>]"
 	echo "  -o, --output        Output PDF file (default: ${DEFAULT_OUTPUT_FILENAME})"
+	echo "  -h, --help          Print this help message, ignore all other flags and exit"
 	echo "      --force         Overwrite output file if it already exists"
 	echo "      --include-demo  Include an optional demo section that explains diff colors"
 	echo "      --demo-old      Path to demo old file (default: testfileold, requires --include-demo)"
@@ -146,16 +147,23 @@ parse_args() {
 
 	while [[ $# -gt 0 ]]; do
 		case "$1" in
+			# OUTPUT
 		-o | --output)
 			shift
 			[[ $# -gt 0 ]] || usage
 			OUTPUT="$1"
 			shift
 			;;
+			# HELP
+		-h | --help)
+			usage 0
+			;;
+			# FORCE
 		-f | --force)
 			FORCE_OVERWRITE=1
 			shift
 			;;
+			# DEMO
 		--include-demo)
 			INCLUDE_DEMO=true
 			shift
@@ -172,6 +180,7 @@ parse_args() {
 			DEMO_NEW="$1"
 			shift
 			;;
+			# INTERACTIVE
 		--interactive)
 			if [[ -n "$HISTORY_PLAN_SOURCE" && "$HISTORY_PLAN_SOURCE" != "interactive" ]]; then
 				echo "Error: --interactive cannot be combined with --history-plan-*" >&2
@@ -199,7 +208,7 @@ parse_args() {
 				fi
 			fi
 			;;
-		####
+			# DETAILED HISTORY
 		--history-plan-file | --detailed-commit-history-file)
 			if [[ -n "$HISTORY_PLAN_SOURCE" && "$HISTORY_PLAN_SOURCE" != "file" ]]; then
 				echo "Error: choose at most one history plan source (interactive, file, or stdin)." >&2
@@ -219,9 +228,6 @@ parse_args() {
 			fi
 			HISTORY_PLAN_SOURCE="stdin"
 			shift
-			;;
-		-h | --help)
-			usage 0
 			;;
 		-*)
 			echo "Unknown option: $1" >&2
