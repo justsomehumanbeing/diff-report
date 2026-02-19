@@ -994,7 +994,7 @@ resolve_html_output_path() {
 }
 
 generate_output() {
-	local workdir html
+	local workdir html should_generate_pdf should_generate_html
 	workdir="$(mktemp -d)"
 	html="${workdir}/report.html"
 	trap 'rm -rf "'"$workdir"'"' EXIT
@@ -1004,29 +1004,36 @@ generate_output() {
 	generate_diff_html "$html" "$workdir"
 
 	if [[ "$HAS_WKHTMLTOPDF" == true && ${CONFIG[html_only]} -ne 1 ]]; then
-		# skip output to pdf if --html-only or if wkhtmltopdf is not available
+		should_generate_pdf=1
+	else
+		should_generate_pdf=0
+	fi
+
+	if [[ ${CONFIG[html_only]} -eq 1 || ${CONFIG[html_output_requested]} -eq 1 || "$HAS_WKHTMLTOPDF" != true ]]; then
+		should_generate_html=1
+	else
+		should_generate_html=0
+	fi
+
+	if [[ "$should_generate_pdf" -eq 1 ]]; then
 		prevent_overwrites "${CONFIG[output_abs]}"
 		wkhtmltopdf "$html" "${CONFIG[output_abs]}"
 		echo "✅ Wrote report to: ${CONFIG[output_abs]}"
+	fi
 
-	else
-
+	if [[ "$should_generate_html" -eq 1 ]]; then
 		local html_out
 		html_out="$(resolve_html_output_path)"
 		prevent_overwrites "$html_out"
 		cp "$html" "$html_out"
-		if [[ ${CONFIG[html_only]} -ne 1 ]]; then
+
+		if [[ "$HAS_WKHTMLTOPDF" != true && ${CONFIG[html_only]} -ne 1 ]]; then
 			# only report fallback if HTML was not requested by --html-only
 			echo "⚠️ wkhtmltopdf not found. Wrote HTML report instead: ${html_out}"
 			echo "   Convert later with: wkhtmltopdf ${html_out} ${CONFIG[output]}"
+		else
+			echo "✅ Wrote HTML report to: ${html_out}"
 		fi
-	fi
-	if [[ "$HAS_WKHTMLTOPDF" == true && (${CONFIG[html_only]} -eq 1 || ${CONFIG[html_output_requested]}) ]]; then
-		local html_out
-		html_out="$(resolve_html_output_path)"
-
-		prevent_overwrites "$html_out"
-		cp "$html" "$html_out"
 	fi
 
 }
