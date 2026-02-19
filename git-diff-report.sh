@@ -86,8 +86,6 @@ PLAN_HAS_BUNDLE=false
 
 prevent_overwrites() {
 	# Guardrails for accidental destructive writes.
-	# $2 indicates whether this is the HTML fallback (so $2==1 means that we are in the fallback).
-	# This is relevant because else we check for the wrong files in the overwrite protection.
 	REPO_TOPLEVEL="$(git rev-parse --show-toplevel)"
 	if [[ "$1" == "$REPO_TOPLEVEL"/* ]]; then
 		OUTPUT_REL_TO_REPO="${1#"$REPO_TOPLEVEL"/}"
@@ -96,15 +94,6 @@ prevent_overwrites() {
 			echo "Refusing to overwrite tracked files. Choose a different output path." >&2
 			exit 2
 		fi
-	fi
-
-	if [[ "$2" -eq 0 ]]; then
-		FILE="$1"
-	elif [[ "$2" -eq 1 ]]; then
-		FILE="${1%.pdf}.html"
-	else
-		echo "fatal error, unknown internal option" >&2
-		exit 1
 	fi
 
 	if [[ -e "$1" && "${CONFIG[force_overwrite]}" -ne 1 ]]; then
@@ -332,7 +321,7 @@ parse_args() {
 		CONFIG[output_abs]="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "${CONFIG[output]}")"
 	fi
 
-	prevent_overwrites "${CONFIG[output_abs]}" 0
+	prevent_overwrites "${CONFIG[output_abs]}"
 
 }
 
@@ -1003,7 +992,7 @@ generate_output() {
 	else
 		local html_out
 		html_out="${CONFIG[output_abs]%.pdf}.html"
-		prevent_overwrites "$html_out" 1
+		prevent_overwrites "$html_out"
 		cp "$html" "$html_out"
 		if [[ ${CONFIG[html_only]} -ne 1 ]]; then
 			# only report fallback if HTML was not requested by --html-only
