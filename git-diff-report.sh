@@ -385,7 +385,7 @@ validate_demo_files() {
 }
 
 synthesize_default_history_plan() {
-	if [[ -n "${CONFIG[history_plan_source]}" ]]; then
+	if [[ "${CONFIG[history_plan_source]}" == "file" || "${CONFIG[history_plan_source]}" == "stdin" ]]; then
 		return 0
 	fi
 
@@ -394,7 +394,7 @@ synthesize_default_history_plan() {
 	CONFIG[history_plan_content]=""
 	for sha in "${commits[@]}"; do
 		subject="$(git show -s --format='%s' "$sha")"
-		HISTORY_PLAN_CONTENT+="pick ${sha} # ${subject}"$'\n'
+		CONFIG[history_plan_content]+="pick ${sha} # ${subject}"$'\n'
 	done
 }
 
@@ -1056,4 +1056,6 @@ main() {
 
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+	main "$@"
+fi
