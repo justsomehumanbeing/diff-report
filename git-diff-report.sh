@@ -69,14 +69,17 @@ html_escape_stream() {
 	sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
 }
 
-# Defaults
-
+# Declare a global CONFIG array to place user-centric config variables in
 declare -A CONFIG=()
 
 # Dependency flags (set by check_dependencies)
 HAS_DELTA=false
 HAS_AHA=false
 HAS_WKHTMLTOPDF=false
+# Plan flags (set by parse_history_plan_records)
+PLAN_HAS_DROP=false
+PLAN_HAS_SQUASH=false
+PLAN_HAS_BUNDLE=false
 
 prevent_overwrites() {
 	# Guardrails for accidental destructive writes.
@@ -111,22 +114,26 @@ prevent_overwrites() {
 }
 
 parse_args() {
+	# LOADING DEFAULTS
+	#
+	# standard flags
 	CONFIG[output]="$DEFAULT_OUTPUT_FILENAME"
 	CONFIG[output_abs]=""
+	CONFIG[force_overwrite]=0
 	CONFIG[include_demo]=false
 	CONFIG[demo_old]="testfileold"
 	CONFIG[demo_new]="testfilenew"
 	CONFIG[a_commit]=""
 	CONFIG[b_commit]=""
+	CONFIG[html_only]=0
+	CONFIG[html_output]="${DEFAULT_OUTPUT_FILENAME%.pdf}.html"
+	# 
+	# history plan controls
 	CONFIG[interactive_mode]=0
-	CONFIG[history_plan_source]=""
+	CONFIG[history_plan_source]="" # "", interactive, file, stdin
 	CONFIG[history_plan_file]=""
 	CONFIG[history_plan_content]=""
-	CONFIG[force_overwrite]=0
 	CONFIG[history_plan_parsed_tsv]=""
-	CONFIG[plan_has_drop]=false
-	CONFIG[plan_has_squash]=false
-	CONFIG[plan_has_bundle]=false
 
 	while [[ $# -gt 0 ]]; do
 		case "$1" in
@@ -450,9 +457,9 @@ parse_history_plan_records() {
 	local -A seen_commits=()
 	local line raw action short_sha tail resolved_sha annotation message reason section_name
 
-	CONFIG[plan_has_drop]=false
-	CONFIG[plan_has_squash]=false
-	CONFIG[plan_has_bundle]=false
+	PLAN_HAS_DROP=false
+	PLAN_HAS_SQUASH=false
+	PLAN_HAS_BUNDLE=false
 
 	while IFS= read -r line || [[ -n "$line" ]]; do
 		line_no=$((line_no + 1))
@@ -476,9 +483,9 @@ parse_history_plan_records() {
 		esac
 
 		case "$action" in
-		drop) CONFIG[plan_has_drop]=true ;;
-		squash) CONFIG[plan_has_squash]=true ;;
-		bundle) CONFIG[plan_has_bundle]=true ;;
+		drop) PLAN_HAS_DROP=true ;;
+		squash) PLAN_HAS_SQUASH=true ;;
+		bundle) PLAN_HAS_BUNDLE=true ;;
 		esac
 
 		if ! resolved_sha="$(git rev-parse --verify --quiet "${short_sha}^{commit}")"; then
@@ -612,7 +619,7 @@ HTML
 <strong>Range:</strong> $(html_escape_arg "${CONFIG[a_commit]}")..$(html_escape_arg "${CONFIG[b_commit]}") (first-parent, oldest → newest)</p>
 HTML
 
-	if [[ "${CONFIG[plan_has_drop]}" == true ]]; then
+	if [[ "${PLAN_HAS_DROP}" == true ]]; then
 		cat >>"$html_path" <<'HTML'
 <div class="banner">
   <strong>Important review warning:</strong> Some commits are configured as <code>drop</code>. Diffs into and out of those commits are intentionally omitted in this report. Reviewers must explicitly trust those hidden transitions.
@@ -849,7 +856,7 @@ render_bundle_boundary() {
 }
 
 emit_drop_cli_warning() {
-	if [[ "${CONFIG[plan_has_drop]}" == true ]]; then
+	if [[ "${PLAN_HAS_DROP}" == true ]]; then
 		echo "Some commits are configured as drop; diffs into/out of those commits are intentionally omitted. Reviewers must trust these hidden transitions." >&2
 	fi
 }
